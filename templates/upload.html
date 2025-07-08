@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Keywords</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #4c63d2 0%, #7c3aed 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+            line-height: 1.6;
+        }
+        .content {
+            padding: 40px;
+        }
+        
+        /* Tab styling */
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #e2e8f0;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        .tab.active {
+            border-bottom-color: #4c63d2;
+            color: #4c63d2;
+        }
+        .tab:hover {
+            background-color: #f8fafc;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Keyword cards for tab view */
+        .keyword-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .keyword-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            transition: all 0.3s ease;
+        }
+        .keyword-card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        .keyword-source {
+            font-size: 0.8em;
+            font-weight: 600;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            display: inline-block;
+        }
+        .keyword-source.termdat { background: #059669; }
+        .keyword-source.gemet { background: #7c3aed; }
+        .keyword-source.wikidata { background: #2563eb; }
+        .keyword-label {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .keyword-description {
+            font-size: 0.9em;
+            color: #6b7280;
+            margin-bottom: 8px;
+        }
+        .keyword-uri a {
+            font-size: 0.8em;
+            color: #4c63d2;
+            text-decoration: none;
+        }
+        
+        .input-field {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 1em;
+            transition: border-color 0.3s ease;
+        }
+        .input-field:focus {
+            border-color: #4c63d2;
+            outline: none;
+        }
+        .action-btn {
+            padding: 15px 30px;
+            background: #059669;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-right: 10px;
+        }
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(5, 150, 105, 0.3);
+        }
+        .action-btn.secondary {
+            background: #6b7280;
+        }
+        .action-btn.secondary:hover {
+            box-shadow: 0 5px 15px rgba(107, 114, 128, 0.3);
+        }
+        
+        .success-message {
+            background: #d1fae5;
+            border: 1px solid #10b981;
+            color: #065f46;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .success-message a {
+            color: #059669;
+            font-weight: 600;
+        }
+        
+        .language-indicators {
+            margin: 8px 0;
+            font-size: 0.85em;
+        }
+        
+        .lang-tag {
+            background: #e2e8f0;
+            color: #475569;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.75em;
+            font-weight: 600;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Upload Keywords to I14Y</h1>
+            <p>Review your selected keywords and upload them to the I14Y catalog</p>
+        </div>
+        
+        <div class="content">
+            <div id="successMessage" class="success-message" style="display: none;"></div>
+            
+            <!-- Tab Navigation -->
+            <div class="tabs">
+                <div class="tab active" data-tab="overview">Overview</div>
+                <div class="tab" data-tab="details">Keyword Details</div>
+            </div>
+            
+            <!-- Overview Tab -->
+            <div id="overview" class="tab-content active">
+                <p><strong>Selected Keywords Summary:</strong></p>
+                <div id="keywordSummary"></div>
+                
+                <input type="text" id="datasetGuid" class="input-field" placeholder="Enter dataset GUID" />
+                <input type="password" id="i14yToken" class="input-field" placeholder="Enter your I14Y token (with or without 'Bearer' prefix)" />
+                
+                <div style="display: flex; gap: 10px; align-items: center; margin-top: 20px;">
+                    <button id="uploadBtn" class="action-btn">Add Keywords to I14Y</button>
+                    <button id="backBtn" class="action-btn secondary">Back to Search</button>
+                </div>
+            </div>
+            
+            <!-- Details Tab -->
+            <div id="details" class="tab-content">
+                <div id="keywordGrid" class="keyword-grid">
+                    <!-- Keywords will be dynamically populated -->
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        const keywords = JSON.parse(localStorage.getItem('selectedKeywords')) || [];
+        const i14yKeywords = JSON.parse(localStorage.getItem('i14yKeywords')) || [];
+        const datasetGuidInput = document.getElementById('datasetGuid');
+        const i14yTokenInput = document.getElementById('i14yToken');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const backBtn = document.getElementById('backBtn');
+        const keywordSummary = document.getElementById('keywordSummary');
+        const keywordGrid = document.getElementById('keywordGrid');
+        const successMessage = document.getElementById('successMessage');
+
+        // Tab functionality
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+                
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        // Debug: Check if keywords were loaded
+        console.log('Keywords loaded from localStorage:', keywords);
+        
+        // Show message if no keywords are selected
+        if (keywords.length === 0) {
+            keywordSummary.innerHTML = '<p style="color: #666; font-style: italic;">No keywords selected. Please go back to the main page and select keywords first.</p>';
+            keywordGrid.innerHTML = '<p style="color: #666; font-style: italic;">No keywords selected.</p>';
+        } else {
+            // Populate summary
+            keywordSummary.innerHTML = `<p>You have selected <strong>${keywords.length}</strong> keywords from various sources:</p>
+                <ul style="margin-left: 20px;">
+                    ${[...new Set(keywords.map(k => k.source))].map(source => 
+                        `<li><strong>${source}:</strong> ${keywords.filter(k => k.source === source).length} keywords</li>`
+                    ).join('')}
+                </ul>`;
+            
+            // Populate detailed keyword grid
+            keywordGrid.innerHTML = keywords.map((keyword, index) => {
+                // Extract display label - prefer German, fallback to other languages or original label
+                let displayLabel = '';
+                if (keyword.multilingual_label) {
+                    displayLabel = keyword.multilingual_label.de || 
+                                 keyword.multilingual_label.en || 
+                                 keyword.multilingual_label.fr || 
+                                 keyword.multilingual_label.it || 
+                                 'No label available';
+                } else {
+                    displayLabel = keyword.label || 'No label available';
+                }
+                
+                // Create language indicators if multilingual data is available
+                let languageIndicators = '';
+                if (keyword.multilingual_label) {
+                    const availableLanguages = Object.keys(keyword.multilingual_label);
+                    languageIndicators = `<div class="language-indicators">${availableLanguages.map(lang => 
+                        `<span class="lang-tag">${lang.toUpperCase()}: ${keyword.multilingual_label[lang]}</span>`
+                    ).join('<br>')}</div>`;
+                }
+                
+                return `
+                    <div class="keyword-card">
+                        <div class="keyword-source ${keyword.source.toLowerCase()}">${keyword.source}</div>
+                        <div class="keyword-label">${displayLabel}</div>
+                        ${languageIndicators}
+                        ${keyword.description ? `<div class="keyword-description">${keyword.description}</div>` : ''}
+                        ${keyword.uri ? `
+                            <div class="keyword-uri">
+                                <a href="${keyword.uri}" target="_blank">${keyword.uri}</a>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Handle the upload button click
+        uploadBtn.addEventListener('click', async () => {
+            const datasetGuid = datasetGuidInput.value.trim();
+            const i14yToken = i14yTokenInput.value.trim();
+            
+            if (!datasetGuid) {
+                alert('Please provide a valid dataset GUID.');
+                return;
+            }
+            
+            if (!i14yToken) {
+                alert('Please provide your I14Y token.');
+                return;
+            }
+
+            if (keywords.length === 0) {
+                alert('No keywords available for upload. Please go back and select keywords first.');
+                return;
+            }
+
+            const payload = {
+                dataset_guid: datasetGuid,
+                i14y_token: i14yToken,
+                keywords: i14yKeywords.length > 0 ? i14yKeywords : keywords.map(keyword => ({
+                    de: keyword.label,
+                    fr: keyword.label,
+                    it: keyword.label,
+                    en: keyword.label,
+                    uri: keyword.uri
+                }))
+            };
+
+            try {
+                uploadBtn.textContent = 'Uploading...';
+                uploadBtn.disabled = true;
+                
+                // Use server-side proxy to avoid CORS issues
+                const response = await fetch('/upload-to-i14y', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const responseData = await response.json();
+
+                if (response.ok) {
+                    // Show success message with dataset link
+                    successMessage.innerHTML = `
+                        <strong>Success!</strong> ${responseData.message}<br>
+                        <a href="${responseData.dataset_link}" target="_blank">→ View dataset on I14Y</a>
+                    `;
+                    successMessage.style.display = 'block';
+                    
+                    // Clear the form after successful upload
+                    datasetGuidInput.value = '';
+                    i14yTokenInput.value = '';
+                    
+                    // Scroll to success message
+                    successMessage.scrollIntoView({ behavior: 'smooth' });
+                } else {
+                    alert(`Failed to upload keywords: ${responseData.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                alert(`Error uploading keywords: ${error.message}`);
+            } finally {
+                uploadBtn.textContent = 'Add Keywords to I14Y';
+                uploadBtn.disabled = false;
+            }
+        });
+
+        // Handle back button click - clear token for security
+        backBtn.addEventListener('click', () => {
+            // Clear token from memory for security
+            i14yTokenInput.value = '';
+            window.location.href = '/';
+        });
+    </script>
+</body>
+</html>
