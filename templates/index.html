@@ -80,6 +80,26 @@
         .modal a:hover {
             text-decoration: underline;
         }
+
+        .lang-tag {
+            display: inline-block;
+            background-color: #e0e0e0;
+            color: #333;
+            border-radius: 4px;
+            padding: 2px 5px;
+            margin-right: 5px;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        
+        .lang-tag.current {
+            background-color: #007acc;
+            color: white;
+        }
+        
+        .language-indicators {
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body>
@@ -211,19 +231,29 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ query })
+                    body: JSON.stringify({ 
+                        query: query,
+                        lang: 'de'  // Default to German as query language
+                    })
                 });
 
-                const data = await response.json();
-
                 if (!response.ok) {
-                    throw new Error(data.error || 'Search failed');
+                    const errorText = await response.text();
+                    console.error('Server response error:', response.status, errorText);
+                    throw new Error(`Server error (${response.status}): ${errorText}`);
                 }
 
-                displayResults(data);
-                updateSearchHistory(query);
+                try {
+                    const data = await response.json();
+                    displayResults(data);
+                    updateSearchHistory(query);
+                } catch (jsonError) {
+                    console.error('JSON parsing error:', jsonError);
+                    throw new Error('Failed to parse server response');
+                }
             } catch (err) {
-                showError(err.message);
+                console.error('Search error:', err);
+                showError(err.message || 'Search failed. Please try again.');
             } finally {
                 hideLoading();
             }
@@ -271,57 +301,75 @@
         }
 
         function displayResults(data) {
-            resultsCount.textContent = `${data.total} keywords found`;
+            if (!data || !data.keywords) {
+                showError('Invalid response data');
+                return;
+            }
 
-            if (data.keywords.length === 0) {
+            resultsCount.textContent = `${data.total || 0} keywords found`;
+
+            if (!data.keywords.length) {
                 keywordGrid.innerHTML = '<div class="no-results">No keywords found for your search term.</div>';
             } else {
-                window.keywordsData = data.keywords;
-                
-                keywordGrid.innerHTML = data.keywords.map((keyword, index) => {
-                    // Extract display label - prefer German, fallback to other languages or original label
-                    let displayLabel = '';
-                    if (keyword.multilingual_label) {
-                        displayLabel = keyword.multilingual_label.de || 
-                                     keyword.multilingual_label.en || 
-                                     keyword.multilingual_label.fr || 
-                                     keyword.multilingual_label.it || 
-                                     'No label available';
-                    } else {
-                        displayLabel = keyword.label || 'No label available';
-                    }
+                try {
+                    window.keywordsData = data.keywords;
+                    const queryLang = data.query_lang || 'de';
                     
-                    // Create language indicators if multilingual data is available
-                    let languageIndicators = '';
-                    if (keyword.multilingual_label) {
-                        const availableLanguages = Object.keys(keyword.multilingual_label);
-                        languageIndicators = `<div class="language-indicators">${availableLanguages.map(lang => 
-                            `<span class="lang-tag">${lang.toUpperCase()}</span>`
-                        ).join('')}</div>`;
-                    }
-                    
-                    return `
-                        <div class="keyword-card" id="keyword-${index}" onclick="toggleKeywordSelection('keyword-${index}', window.keywordsData[${index}])">
-                            <div class="keyword-source ${keyword.source.toLowerCase()}">${keyword.source}</div>
-                            <div class="keyword-label">${displayLabel}</div>
-                            ${languageIndicators}
-                            ${keyword.description ? `<div class="keyword-description">${keyword.description}</div>` : ''}
-                            ${keyword.uri ? `
-                                <div class="keyword-uri">
-                                    <a href="${keyword.uri}" target="_blank" onclick="event.stopPropagation()">${keyword.uri}</a>
-                                </div>
-                            ` : ''}
-                        </div>
-                    `;
-                }).join('');
+                    keywordGrid.innerHTML = data.keywords.map((keyword, index) => {
+                        // Extract display label in query language, fall back to other languages if needed
+                        let displayLabel = '';
+                        if (keyword.multilingual_label) {
+                            // First try to get the label in the query language
+                            displayLabel = keyword.multilingual_label[queryLang];
+                            
+                            // If not available, fall back to any available language
+                            if (!displayLabel) {
+                                for (const lang of ['de', 'en', 'fr', 'it']) {
+                                    if (keyword.multilingual_label[lang]) {
+                                        displayLabel = keyword.multilingual_label[lang];
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if (!displayLabel) {
+                                displayLabel = 'No label available';
+                            }
+                        } else {
+                            displayLabel = keyword.label || 'No label available';
+                        }
+                        
+                        // Create language indicators if multilingual data is available
+                        let languageIndicators = '';
+                        if (keyword.multilingual_label) {
+                            const availableLanguages = Object.keys(keyword.multilingual_label);
+                            languageIndicators = `<div class="language-indicators">${availableLanguages.map(lang => 
+                                `<span class="lang-tag ${lang === queryLang ? 'current' : ''}" 
+                                 title="${lang.toUpperCase()}: ${keyword.multilingual_label[lang]}">${lang.toUpperCase()}</span>`
+                            ).join('')}</div>`;
+                        }
+                        
+                        return `
+                            <div class="keyword-card" id="keyword-${index}" onclick="toggleKeywordSelection('keyword-${index}', window.keywordsData[${index}])">
+                                <div class="keyword-source ${keyword.source.toLowerCase()}">${keyword.source}</div>
+                                <div class="keyword-label">${displayLabel}</div>
+                                ${languageIndicators}
+                                ${keyword.description ? `<div class="keyword-description">${keyword.description}</div>` : ''}
+                                ${keyword.uri ? `
+                                    <div class="keyword-uri">
+                                        <a href="${keyword.uri}" target="_blank" onclick="event.stopPropagation()">${keyword.uri}</a>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        `;
+                    }).join('');
+                } catch (renderError) {
+                    console.error('Error rendering results:', renderError);
+                    keywordGrid.innerHTML = '<div class="error">Error displaying results. Please try again.</div>';
+                }
             }
 
             selectedKeywords.clear();
-            
-            // Enable Show JSON and Upload buttons after search results are available
-            showJsonBtn.disabled = false;
-            connectI14YBtn.disabled = false;
-            
             updateButtonVisibility();
             showResults();
         }

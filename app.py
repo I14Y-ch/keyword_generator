@@ -15,7 +15,7 @@ app.config['CACHE_DEFAULT_TIMEOUT'] = 300
 cache = Cache(app)
 
 # Network environment configuration
-NETWORK_ENV = "external"  # Change to "external" for external networks
+NETWORK_ENV = "internal"  # Change to "external" for external networks
 
 class KeywordGenerator:
     def __init__(self):
@@ -25,162 +25,143 @@ class KeywordGenerator:
         # Set SSL verification based on network environment
         self.verify_ssl = NETWORK_ENV != "internal"
     
-    def search_termdat(self, query):
+    def search_termdat(self, query, query_lang='de'):
         """Search TERMDAT for keywords using the official API with multilingual support"""
         results = []
         entry_ids_processed = set()  # Track processed entries to avoid duplicates
         
-        # Languages to search: DE, FR, IT, EN
-        languages = ['DE', 'FR', 'IT', 'EN']
+        # Lowercase the query language
+        query_lang = query_lang.lower()
         
-        for in_lang in languages:
-            try:
-                # TERMDAT API v2 search endpoint - using working format
-                url = "https://api.termdat.bk.admin.ch/v2/Search"
+        try:
+            # Use separate searches for each language to maximize results
+            # This approach increases chances of finding terms in the desired languages
+            all_multilingual_terms = {}  # Dictionary to collect terms by entry_id
+            
+            # Map language codes to TERMDAT language IDs
+            # 2=DE, 3=EN, 6=FR, 7=IT, 8=RM
+            language_map = {
+                'de': 2,
+                'fr': 6,
+                'it': 7,
+                'en': 3
+            }
+            
+            # Search in all 4 languages to get comprehensive results
+            for search_lang, lang_id in language_map.items():
+                # TERMDAT API search endpoint
+                url = "https://www.termdat.bk.admin.ch/api/Search/Search"
+                
+                # Build parameters according to the working request format
                 params = {
-                    'SearchTerm': query,
-                    'InLanguageCode': in_lang,
-                    'OutLanguageCode': in_lang,  # Change to same language instead of 'ALL'
-                    'ReturnType': 'Detail'  # Change from 'Summary' to 'Detail'
+                    'pageindex': 1,
+                    'pagesize': 10,  # Limit results per language
+                    'phrase': query,
+                    'sourceLanguageIds': lang_id,
+                    'targetLanguageIds': lang_id,  # Same language for source and target
+                    'offices': 1,
+                    'officesPriority': 'true',
+                    'status': 1,
+                    'statusPriority': 'true',
+                    'fields.term': 'true',
+                    'fields.name': 'true',
+                    'fields.abbreviation': 'true',
+                    'fields.phraseology': 'true',
+                    'fields.definition': 'false',
+                    'fields.note': 'false',
+                    'fields.context': 'false',
+                    'fields.source': 'false',
+                    'fields.metadata': 'true',
+                    'fields.country': 'false',
+                    'fields.comment': 'false'
                 }
                 
-                # Log the request details
-                logging.debug(f"TERMDAT Request URL: {url}")
-                logging.debug(f"TERMDAT Request Params: {params}")
+                logging.debug(f"TERMDAT Search Request for {search_lang}: {url}")
                 
                 response = requests.get(url, params=params, timeout=10, verify=self.verify_ssl)
                 
-                # Log the response status and content
-                logging.debug(f"TERMDAT Response Status: {response.status_code}")
-                logging.debug(f"TERMDAT Response Content: {response.text}")
-                
                 if response.status_code == 200:
-                    data = response.json()
-                    logging.debug(f"TERMDAT Parsed JSON: {data}")
-                    
-                    # Handle the response structure for Detail return type
-                    if isinstance(data, list):
-                        for entry in data:
-                            entry_id = entry.get('id')
-                            if entry_id and entry_id not in entry_ids_processed:
-                                entry_ids_processed.add(entry_id)
+                    try:
+                        data = response.json()
+                        
+                        # Process search entries from the response
+                        if 'searchEntries' in data and isinstance(data['searchEntries'], list):
+                            for entry in data['searchEntries']:
+                                entry_id = entry.get('id')
+                                if not entry_id:
+                                    continue
                                 
-                                # Extract term directly from current response first
-                                current_term = self._extract_term_from_entry(entry)
+                                # Initialize this entry's terms if not already in our collection
+                                if entry_id not in all_multilingual_terms:
+                                    all_multilingual_terms[entry_id] = {
+                                        'terms': {},
+                                        'collection': '',
+                                        'description': f"TERMDAT entry for '{query}'"
+                                    }
                                 
-                                # Start with current language term
-                                multilingual_terms = {}
-                                if current_term:
-                                    multilingual_terms[in_lang.lower()] = current_term
+                                # Store collection info
+                                if 'collection' in entry and 'name' in entry['collection']:
+                                    all_multilingual_terms[entry_id]['collection'] = entry['collection']['name']
                                 
-                                # Get other language variants
-                                additional_terms = self._get_termdat_multilingual_terms(query, entry_id, exclude_lang=in_lang)
-                                if additional_terms:
-                                    multilingual_terms.update(additional_terms)
-                                
-                                if multilingual_terms:
-                                    # Build the TERMDAT URI
-                                    termdat_uri = f"https://register.ld.admin.ch/termdat/{entry_id}"
-                                    
-                                    # Get description from entry
-                                    description = f"TERMDAT entry for '{query}'"
-                                    if 'collection' in entry:
-                                        collection_text = entry.get('collection', {}).get('text', '')
-                                        if collection_text:
-                                            description = f"TERMDAT: {collection_text}"
-                                    
-                                    logging.debug(f"Adding TERMDAT result: {multilingual_terms}")
-                                    
-                                    results.append({
-                                        'source': 'TERMDAT',
-                                        'multilingual_label': multilingual_terms,
-                                        'uri': termdat_uri,
-                                        'description': description,
-                                        'entry_id': entry_id
-                                    })
+                                # Extract terms from this entry
+                                if 'terms' in entry and isinstance(entry['terms'], list):
+                                    for term_obj in entry['terms']:
+                                        lang_id = term_obj.get('languageId')
+                                        for lang_code, tid in language_map.items():
+                                            if lang_id == tid:
+                                                # Get term from name or abbreviation
+                                                term_text = term_obj.get('name', '')
+                                                if not term_text and 'abbreviation' in term_obj:
+                                                    term_text = term_obj.get('abbreviation', '')
+                                                
+                                                if term_text:
+                                                    all_multilingual_terms[entry_id]['terms'][lang_code] = term_text
+                                                break
+                    except Exception as e:
+                        logging.error(f"Error parsing TERMDAT response for {search_lang}: {e}")
                 else:
-                    logging.error(f"TERMDAT API returned status {response.status_code}: {response.text}")
-            except Exception as e:
-                logging.error(f"Error searching TERMDAT for language {in_lang}: {e}")
+                    logging.error(f"TERMDAT API returned non-200 status for {search_lang}: {response.status_code}")
+            
+            # Now create result objects from the collected terms
+            for entry_id, entry_data in all_multilingual_terms.items():
+                multilingual_terms = entry_data['terms']
+                
+                # Only include entries that have the required language coverage
+                required_languages = {'de', 'fr', 'it', 'en'}
+                available_languages = set(multilingual_terms.keys())
+                
+                # Check if all required languages are available
+                if required_languages.issubset(available_languages):
+                    # Build the TERMDAT URI
+                    termdat_uri = f"https://register.ld.admin.ch/termdat/{entry_id}"
+                    
+                    # Get a suitable description
+                    description = entry_data['description']
+                    if entry_data['collection']:
+                        description = f"TERMDAT: {entry_data['collection']}"
+                    
+                    # Track which languages are available
+                    available_languages_list = list(multilingual_terms.keys())
+                    
+                    logging.debug(f"Adding TERMDAT result for entry {entry_id} with all required languages: {multilingual_terms}")
+                    
+                    results.append({
+                        'source': 'TERMDAT',
+                        'multilingual_label': multilingual_terms,
+                        'uri': termdat_uri,
+                        'description': description,
+                        'entry_id': entry_id,
+                        'query_lang': query_lang,
+                        'available_languages': available_languages_list
+                    })
+                else:
+                    missing_languages = required_languages - available_languages
+                    logging.debug(f"Skipping TERMDAT entry {entry_id} due to missing languages: {missing_languages}")
+        except Exception as e:
+            logging.error(f"Error searching TERMDAT: {e}")
         
         logging.debug(f"TERMDAT total results: {len(results)}")
         return results
-    
-    def _extract_term_from_entry(self, entry):
-        """Extract the term from a TERMDAT entry"""
-        term = None
-        
-        # TERMDAT API returns terms in 'languageDetails' array
-        if 'languageDetails' in entry and entry['languageDetails']:
-            for lang_detail in entry['languageDetails']:
-                if 'name' in lang_detail and lang_detail['name']:
-                    term = lang_detail['name']
-                    break
-        
-        # Fallback: try to extract from hits (old structure)
-        if not term and 'hits' in entry and entry['hits']:
-            for hit in entry['hits']:
-                if 'terminus' in hit and hit['terminus']:
-                    term = hit['terminus']
-                    break
-                elif 'name' in hit and hit['name']:
-                    term = hit['name']
-                    break
-                elif 'abbreviation' in hit and hit['abbreviation']:
-                    term = hit['abbreviation']
-                    break
-        
-        # Final fallback: try direct fields on entry
-        if not term:
-            if 'terminus' in entry and entry['terminus']:
-                term = entry['terminus']
-            elif 'name' in entry and entry['name']:
-                term = entry['name']
-            elif 'abbreviation' in entry and entry['abbreviation']:
-                term = entry['abbreviation']
-        
-        logging.debug(f"Extracted term from entry {entry.get('id', 'unknown')}: {term}")
-        return term
-    
-    def _get_termdat_multilingual_terms(self, query, entry_id, exclude_lang=None):
-        """Get multilingual terms for a TERMDAT entry by querying each language"""
-        multilingual_terms = {}
-        
-        for lang_code in ['DE', 'FR', 'IT', 'EN']:
-            if lang_code == exclude_lang:
-                continue  # Skip the language we already have
-                
-            try:
-                url = "https://api.termdat.bk.admin.ch/v2/Search"
-                params = {
-                    'SearchTerm': query,
-                    'InLanguageCode': lang_code,
-                    'OutLanguageCode': lang_code,
-                    'ReturnType': 'Detail'
-                }
-                
-                response = requests.get(url, params=params, timeout=5, verify=self.verify_ssl)
-                if response.status_code == 200:
-                    data = response.json()
-                    if isinstance(data, list):
-                        for entry in data:
-                            if entry.get('id') == entry_id:
-                                # Extract term from languageDetails for the specific language
-                                term = None
-                                if 'languageDetails' in entry and entry['languageDetails']:
-                                    for lang_detail in entry['languageDetails']:
-                                        if lang_detail.get('languageIsoCode') == lang_code and 'name' in lang_detail:
-                                            term = lang_detail['name']
-                                            break
-                                
-                                if term:
-                                    multilingual_terms[lang_code.lower()] = term
-                                    logging.debug(f"Found {lang_code} term for entry {entry_id}: {term}")
-                                break
-            except Exception as e:
-                logging.debug(f"Could not get {lang_code} term for entry {entry_id}: {e}")
-        
-        return multilingual_terms
 
     def search_gemet(self, query):
         """Search GEMET for keywords with multilingual support"""
@@ -377,12 +358,12 @@ class KeywordGenerator:
         
         return i14y_keywords
 
-    def generate_keywords(self, query):
+    def generate_keywords(self, query, query_lang='de'):
         """Generate keywords following DCAT-AP CH priority cascade"""
         all_keywords = []
         
         # Priority 1: TERMDAT (multilingual)
-        termdat_results = self.search_termdat(query)
+        termdat_results = self.search_termdat(query, query_lang)
         all_keywords.extend(termdat_results)
         
         # Priority 2: GEMET (multilingual)
@@ -403,29 +384,59 @@ def index():
 @app.route('/search', methods=['POST'])
 def search_keywords():
     query = request.json.get('query', '').strip()
+    query_lang = request.json.get('lang', 'de').strip().lower()
     
     if not query:
         return jsonify({'error': 'Query is required'}), 400
     
     # Check cache first
-    cached_result = cache.get(query)
+    cache_key = f"{query}:{query_lang}"
+    cached_result = cache.get(cache_key)
     if cached_result:
         return jsonify(cached_result)
 
     try:
-        keywords = keyword_generator.generate_keywords(query)
+        keywords = keyword_generator.generate_keywords(query, query_lang)
         i14y_keywords = keyword_generator._convert_to_i14y_format(keywords)
+        
+        # Ensure all keywords are JSON serializable
+        sanitized_keywords = []
+        for kw in keywords:
+            try:
+                # Create a new dict with only necessary serializable data
+                sanitized_kw = {
+                    'source': kw.get('source', ''),
+                    'multilingual_label': kw.get('multilingual_label', {}),
+                    'uri': kw.get('uri', ''),
+                    'description': kw.get('description', ''),
+                    'entry_id': kw.get('entry_id', ''),
+                    'query_lang': kw.get('query_lang', query_lang),
+                    'available_languages': kw.get('available_languages', list(kw.get('multilingual_label', {}).keys()))
+                }
+                sanitized_keywords.append(sanitized_kw)
+            except Exception as e:
+                logging.error(f"Error sanitizing keyword for JSON: {e}")
         
         result = {
             'query': query,
-            'keywords': keywords,  # Raw multilingual format for display
+            'query_lang': query_lang,
+            'keywords': sanitized_keywords,  # Use sanitized keywords
             'i14y_keywords': i14y_keywords,  # I14Y-ready format for upload
-            'total': len(keywords)
+            'total': len(sanitized_keywords)
         }
-        cache.set(query, result)
-        return jsonify(result)
+        
+        # Test JSON serialization before caching
+        try:
+            json.dumps(result)
+            cache.set(cache_key, result)
+            return jsonify(result)
+        except Exception as json_error:
+            logging.error(f"JSON serialization error: {json_error}")
+            return jsonify({'error': 'Error creating JSON response', 'details': str(json_error)}), 500
+            
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logging.error(f"Search error: {e}", exc_info=True)
+        return jsonify({'error': f'Error during search: {str(e)}'}), 500
 
 @app.route('/upload')
 def upload_keywords():
