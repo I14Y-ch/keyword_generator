@@ -5,12 +5,90 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DCAT-AP CH Keyword Generator</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <style>
+        .info-icon {
+            display: inline-block;
+            margin-left: 8px;
+            width: 18px;
+            height: 18px;
+            background-color: #007acc;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 18px;
+            font-size: 12px;
+            cursor: pointer;
+            vertical-align: middle;
+        }
+        
+        .info-icon:hover {
+            background-color: #005999;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        
+        .modal-content {
+            background-color: #fefefe;
+            margin: 10% auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 600px;
+            position: relative;
+        }
+        
+        .modal-close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+        
+        .modal-close:hover {
+            color: #000;
+        }
+        
+        .modal h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        
+        .modal ol {
+            padding-left: 20px;
+        }
+        
+        .modal li {
+            margin-bottom: 10px;
+        }
+        
+        .modal a {
+            color: #007acc;
+            text-decoration: none;
+        }
+        
+        .modal a:hover {
+            text-decoration: underline;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>DCAT-AP CH Keyword Generator</h1>
-            <p>Generate compliant keywords from TERMDAT, GEMET, and Wikidata following DCAT-AP CH specifications</p>
+            <p>Generate compliant keywords from TERMDAT, GEMET, and Wikidata following DCAT-AP CH specifications
+                <span class="info-icon" onclick="openModal()" title="Show keyword priority cascade">i</span>
+            </p>
         </div>
 
         <div class="search-section">
@@ -22,15 +100,6 @@
                     <button id="showJsonBtn" class="search-btn" disabled>Show JSON</button>
                     <button id="connectI14YBtn" class="search-btn secondary" disabled>Upload to I14Y</button>
                 </div>
-            </div>
-            <div class="priority-info">
-                <h3>Keyword Priority Cascade</h3>
-                <ol>
-                    <li><strong>TERMDAT</strong> - Swiss federal terminology database</li>
-                    <li><strong>GEMET</strong> - Environmental terminology for geo-related context</li>
-                    <li><strong>Wikidata</strong> - General knowledge base</li>
-                    <li><strong>Literal</strong> - Plain text as last resort</li>
-                </ol>
             </div>
         </div>
 
@@ -54,6 +123,23 @@
         <div id="searchHistorySection" class="search-section" style="display: none;">
             <h3>Search History</h3>
             <ul id="searchHistoryList" style="list-style-type: none; padding: 0;"></ul>
+        </div>
+
+        <!-- Modal for DCAT-AP CH Information -->
+        <div id="dcatModal" class="modal">
+            <div class="modal-content">
+                <span class="modal-close" onclick="closeModal()">&times;</span>
+                <h3>DCAT-AP CH Keyword Priority Cascade</h3>
+                <p>According to the <a href="https://www.dcat-ap.ch/releases/2.0/dcat-ap-ch_2.0.html#dataset-keyword" target="_blank">DCAT-AP CH 2.0 specification</a>, keywords should be sourced in the following priority order:</p>
+                <ol>
+                    <li><strong>TERMDAT</strong> - Swiss federal terminology database (highest priority)</li>
+                    <li><strong>GEMET</strong> - Environmental terminology for geo-related context</li>
+                    <li><strong>Wikidata</strong> - General knowledge base</li>
+                    <li><strong>Literal keywords</strong> - Plain text as last resort (lowest priority)</li>
+                </ol>
+                <p><strong>Multilingual Support:</strong> Keywords are automatically provided in German (DE), French (FR), Italian (IT), and English (EN) when available from the source vocabularies.</p>
+                <p><strong>Semantic URIs:</strong> Each keyword includes its original URI from the source vocabulary for semantic web compatibility.</p>
+            </div>
         </div>
     </div>
 
@@ -316,6 +402,29 @@
             
             // Redirect directly to upload page
             window.location.href = '/upload';
+        });
+
+        function openModal() {
+            document.getElementById('dcatModal').style.display = 'block';
+        }
+
+        function closeModal() {
+            document.getElementById('dcatModal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside of it
+        window.onclick = function(event) {
+            const modal = document.getElementById('dcatModal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        }
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeModal();
+            }
         });
     </script>
 </body>
