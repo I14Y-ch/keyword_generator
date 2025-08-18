@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import re
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -26,11 +28,34 @@ class KeywordGenerator:
         self.wikidata_base_url = "https://www.wikidata.org/w/api.php"
         # Set SSL verification based on network environment
         self.verify_ssl = NETWORK_ENV != "internal"
-    
+
+        # Create a persistent session for outgoing HTTP requests to improve connection reuse
+        # and set a descriptive User-Agent so Wikidata operators can contact us if needed.
+        self.session = requests.Session()
+        contact = os.environ.get('ADMIN_CONTACT', 'devteam@example.com')
+        ua = f"keyword-generator/1.0 (mailto:{contact})"
+        # Set headers used for Wikidata requests (also helpful for other endpoints)
+        self.session.headers.update({'User-Agent': ua, 'From': contact})
+
+        # Configure retries with exponential backoff for transient errors and 429 throttling
+        retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 502, 503, 504], allowed_methods=["GET", "POST"])
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount('https://', adapter)
+        self.session.mount('http://', adapter)
+
     def _discover_synonyms_from_wikidata(self, query, limit=3):
         """Discover synonyms and related terms using Wikidata's linked data relationships"""
         synonyms = set()
-        
+
+        cache_key = f"wd_syn:{query.lower()}"
+        try:
+            cached = cache.get(cache_key)
+            if cached:
+                logging.debug(f"Returning cached Wikidata synonyms for '{query}'")
+                return cached[:limit]
+        except Exception:
+            pass
+
         try:
             # First, find the main entity for the query
             search_params = {
@@ -40,8 +65,8 @@ class KeywordGenerator:
                 'format': 'json',
                 'limit': 1  # Just get the best match
             }
-            
-            response = requests.get(self.wikidata_base_url, params=search_params, timeout=10, verify=self.verify_ssl)
+
+            response = self.session.get(self.wikidata_base_url, params=search_params, timeout=10, verify=self.verify_ssl)
             if response.status_code == 200:
                 data = response.json()
                 if 'search' in data and data['search']:
@@ -50,16 +75,21 @@ class KeywordGenerator:
                         # Get related entities using Wikidata properties
                         related_terms = self._get_wikidata_related_terms(entity_id)
                         synonyms.update(related_terms)
-                        
+
         except Exception as e:
             logging.debug(f"Error discovering Wikidata synonyms for '{query}': {e}")
-        
-        return list(synonyms)[:limit]
-    
+
+        result = list(synonyms)[:limit]
+        try:
+            cache.set(cache_key, result, timeout=3600)
+        except Exception:
+            pass
+        return result
+
     def _get_wikidata_related_terms(self, entity_id):
         """Get related terms from Wikidata using semantic properties"""
         related_terms = set()
-        
+
         try:
             # Query for the entity and its claims (relationships)
             query_params = {
@@ -69,13 +99,13 @@ class KeywordGenerator:
                 'languages': 'de|en',
                 'format': 'json'
             }
-            
-            response = requests.get(self.wikidata_base_url, params=query_params, timeout=10, verify=self.verify_ssl)
+
+            response = self.session.get(self.wikidata_base_url, params=query_params, timeout=10, verify=self.verify_ssl)
             if response.status_code == 200:
                 data = response.json()
                 if 'entities' in data and entity_id in data['entities']:
                     entity = data['entities'][entity_id]
-                    
+
                     # Extract aliases (alternative names)
                     if 'aliases' in entity:
                         for lang in ['de', 'en']:
@@ -83,16 +113,16 @@ class KeywordGenerator:
                                 for alias in entity['aliases'][lang]:
                                     if 'value' in alias:
                                         related_terms.add(alias['value'])
-                    
+
                     # Look for specific semantic relationships in claims
                     if 'claims' in entity:
                         claims = entity['claims']
-                        
+
                         # Common properties that indicate related concepts:
                         # P31: instance of, P279: subclass of, P361: part of, P527: has part
                         # P1889: different from, P460: said to be the same as
                         semantic_properties = ['P31', 'P279', 'P361', 'P527', 'P1889', 'P460']
-                        
+
                         for prop in semantic_properties:
                             if prop in claims:
                                 for claim in claims[prop][:2]:  # Limit to 2 per property
@@ -104,14 +134,23 @@ class KeywordGenerator:
                                                 related_label = self._get_wikidata_entity_label(target_id)
                                                 if related_label:
                                                     related_terms.add(related_label)
-                        
+
         except Exception as e:
             logging.debug(f"Error getting Wikidata related terms for {entity_id}: {e}")
-        
+
         return related_terms
-    
+
     def _get_wikidata_entity_label(self, entity_id):
         """Get the German label for a Wikidata entity"""
+        # Check cache first
+        cache_key = f"wd_label:{entity_id}"
+        try:
+            cached = cache.get(cache_key)
+            if cached:
+                return cached
+        except Exception:
+            pass
+
         try:
             params = {
                 'action': 'wbgetentities',
@@ -120,8 +159,8 @@ class KeywordGenerator:
                 'languages': 'de|en',
                 'format': 'json'
             }
-            
-            response = requests.get(self.wikidata_base_url, params=params, timeout=5, verify=self.verify_ssl)
+
+            response = self.session.get(self.wikidata_base_url, params=params, timeout=5, verify=self.verify_ssl)
             if response.status_code == 200:
                 data = response.json()
                 if 'entities' in data and entity_id in data['entities']:
@@ -130,16 +169,21 @@ class KeywordGenerator:
                         # Prefer German, fallback to English
                         for lang in ['de', 'en']:
                             if lang in entity['labels'] and 'value' in entity['labels'][lang]:
-                                return entity['labels'][lang]['value']
+                                value = entity['labels'][lang]['value']
+                                try:
+                                    cache.set(cache_key, value, timeout=24*3600)
+                                except Exception:
+                                    pass
+                                return value
         except Exception as e:
             logging.debug(f"Error getting label for entity {entity_id}: {e}")
-        
+
         return None
-    
+
     def _discover_synonyms_from_termdat(self, query, limit=2):
         """Discover related terms by analyzing TERMDAT search results for semantic similarity"""
         related_terms = set()
-        
+
         try:
             # Do a broader search in TERMDAT to find related concepts
             url = "https://www.termdat.bk.admin.ch/api/Search/Search"
@@ -163,13 +207,13 @@ class KeywordGenerator:
                 'fields.country': 'false',
                 'fields.comment': 'false'
             }
-            
+
             response = requests.get(url, params=params, timeout=10, verify=self.verify_ssl)
             if response.status_code == 200:
                 data = response.json()
                 if 'searchEntries' in data and isinstance(data['searchEntries'], list):
                     query_lower = query.lower()
-                    
+
                     for entry in data['searchEntries']:
                         if 'terms' in entry and isinstance(entry['terms'], list):
                             for term_obj in entry['terms']:
@@ -178,29 +222,29 @@ class KeywordGenerator:
                                     # Check if this term is semantically related
                                     if self._is_semantically_related(query, term_text, entry):
                                         related_terms.add(term_text)
-                                        
+
         except Exception as e:
             logging.debug(f"Error discovering TERMDAT synonyms for '{query}': {e}")
-        
+
         return list(related_terms)[:limit]
-    
+
     def _is_semantically_related(self, original_query, candidate_term, termdat_entry):
         """Determine if a candidate term is semantically related to the original query"""
         # Simple heuristics for semantic relatedness:
-        
+
         # 1. Check if they appear in the same collection (domain similarity)
         collection_name = ''
         if 'collection' in termdat_entry and 'name' in termdat_entry['collection']:
             collection_name = termdat_entry['collection']['name'].lower()
-        
+
         # 2. Check for shared word stems (basic linguistic similarity)
         original_words = set(original_query.lower().split())
         candidate_words = set(candidate_term.lower().split())
-        
+
         # If they share at least one significant word (>2 chars), they might be related
         shared_words = original_words & candidate_words
         significant_shared = any(len(word) > 2 for word in shared_words)
-        
+
         # 3. Check for common prefixes/suffixes (compound words in German)
         has_common_affix = False
         for orig_word in original_words:
@@ -212,14 +256,14 @@ class KeywordGenerator:
                     # Check for common suffix (last 4+ chars)
                     elif orig_word[-4:] == cand_word[-4:]:
                         has_common_affix = True
-        
+
         # 4. Length similarity (avoid very short or very long terms)
         length_ratio = min(len(original_query), len(candidate_term)) / max(len(original_query), len(candidate_term))
         reasonable_length = length_ratio > 0.3
-        
+
         # Term is related if it meets multiple criteria
         return (significant_shared or has_common_affix) and reasonable_length
-    
+
     def _termdat_candidate_exists(self, candidate):
         """Lightweight TERMDAT check: return True if TERMDAT contains the candidate term (any language).
         This avoids invoking the heavier search_termdat which may loop back to synonyms.
@@ -365,7 +409,7 @@ class KeywordGenerator:
         except Exception as e:
             logging.debug(f"Synonym cache write failed for '{query}': {e}")
         return result
-    
+
     def search_termdat(self, query, query_lang='de', include_synonyms=True, max_results=10):
         """Search TERMDAT for keywords using the official API with multilingual support and synonym expansion
         This version limits pagesize and stops early when enough results have been gathered to reduce API calls.
@@ -626,8 +670,14 @@ class KeywordGenerator:
     def search_wikidata(self, query):
         """Search Wikidata for keywords with multilingual support"""
         results = []
-        
         try:
+            # Try cached final results first to avoid repeated Wikidata calls
+            cache_key = f"wd_results:{query.lower()}"
+            cached = cache.get(cache_key)
+            if cached:
+                logging.debug(f"Returning cached Wikidata results for '{query}'")
+                return cached
+
             # First search in English to get entity IDs
             search_params = {
                 'action': 'wbsearchentities',
@@ -636,34 +686,42 @@ class KeywordGenerator:
                 'format': 'json',
                 'limit': 3
             }
-            
-            search_response = requests.get(self.wikidata_base_url, params=search_params, timeout=10, verify=self.verify_ssl)
+
+            search_response = self.session.get(self.wikidata_base_url, params=search_params, timeout=10, verify=self.verify_ssl)
             if search_response.status_code == 200:
                 search_data = search_response.json()
-                if 'search' in search_data:
-                    for item in search_data['search']:
-                        entity_id = item.get('id', '')
-                        if entity_id:
-                            # Get multilingual labels for this entity
-                            multilingual_terms = self._get_wikidata_multilingual_labels(entity_id)
-                            if multilingual_terms:
-                                results.append({
-                                    'source': 'Wikidata',
-                                    'multilingual_label': multilingual_terms,
-                                    'uri': f"http://www.wikidata.org/entity/{entity_id}",
-                                    'description': item.get('description', f'Wikidata entity for {query}')
-                                })
-                            
+                for item in search_data.get('search', []):
+                    entity_id = item.get('id', '')
+                    if entity_id:
+                        # Get multilingual labels for this entity
+                        multilingual_terms = self._get_wikidata_multilingual_labels(entity_id)
+                        if multilingual_terms:
+                            results.append({
+                                'source': 'Wikidata',
+                                'multilingual_label': multilingual_terms,
+                                'uri': f"http://www.wikidata.org/entity/{entity_id}",
+                                'description': item.get('description', f'Wikidata entity for {query}')
+                            })
+
+            try:
+                cache.set(cache_key, results, timeout=3600)
+            except Exception:
+                pass
+
         except Exception as e:
-            print(f"Error searching Wikidata: {e}")
-        
+            logging.error(f"Error searching Wikidata: {e}")
+
         return results
-    
+
     def _get_wikidata_multilingual_labels(self, entity_id):
         """Get multilingual labels for a Wikidata entity"""
         multilingual_terms = {}
-        
         try:
+            cache_key = f"wd_labels:{entity_id}"
+            cached = cache.get(cache_key)
+            if cached:
+                return cached
+
             # Use Wikidata API to get entity data with labels in multiple languages
             entity_params = {
                 'action': 'wbgetentities',
@@ -672,23 +730,28 @@ class KeywordGenerator:
                 'languages': 'de|fr|it|en',  # Request all 4 languages
                 'format': 'json'
             }
-            
-            entity_response = requests.get(self.wikidata_base_url, params=entity_params, timeout=10, verify=self.verify_ssl)
+
+            entity_response = self.session.get(self.wikidata_base_url, params=entity_params, timeout=10, verify=self.verify_ssl)
             if entity_response.status_code == 200:
                 entity_data = entity_response.json()
                 if 'entities' in entity_data and entity_id in entity_data['entities']:
                     entity = entity_data['entities'][entity_id]
-                    if 'labels' in entity:
-                        labels = entity['labels']
-                        
-                        # Extract labels for each language
-                        for lang_code in ['de', 'fr', 'it', 'en']:
-                            if lang_code in labels and 'value' in labels[lang_code]:
-                                multilingual_terms[lang_code] = labels[lang_code]['value']
-                                
+                    labels = entity.get('labels', {})
+
+                    # Extract labels for each language
+                    for lang_code in ['de', 'fr', 'it', 'en']:
+                        if lang_code in labels and 'value' in labels[lang_code]:
+                            multilingual_terms[lang_code] = labels[lang_code]['value']
+
+            if multilingual_terms:
+                try:
+                    cache.set(cache_key, multilingual_terms, timeout=24*3600)
+                except Exception:
+                    pass
+
         except Exception as e:
-            print(f"Error getting Wikidata multilingual labels for {entity_id}: {e}")
-        
+            logging.debug(f"Error getting Wikidata multilingual labels for {entity_id}: {e}")
+
         return multilingual_terms if multilingual_terms else None
     
     def _convert_to_i14y_format(self, keywords):
