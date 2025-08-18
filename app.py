@@ -3,6 +3,8 @@ from flask_caching import Cache
 import requests
 import json
 import logging
+import os
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -25,26 +27,125 @@ class KeywordGenerator:
         # Set SSL verification based on network environment
         self.verify_ssl = NETWORK_ENV != "internal"
     
-    def search_termdat(self, query, query_lang='de'):
-        """Search TERMDAT for keywords using the official API with multilingual support"""
-        results = []
-        
-        # Lowercase the query language
-        query_lang = query_lang.lower()
+    def _discover_synonyms_from_wikidata(self, query, limit=3):
+        """Discover synonyms and related terms using Wikidata's linked data relationships"""
+        synonyms = set()
         
         try:
-            # Map language IDs to codes
-            # 2=DE, 3=EN, 6=FR, 7=IT, 8=RM
-            # Note: Excluding Spanish (4=ES) as I14Y platform cannot handle it
-            language_map = {2: 'de', 6: 'fr', 7: 'it', 3: 'en', 8: 'rm'}
+            # First, find the main entity for the query
+            search_params = {
+                'action': 'wbsearchentities',
+                'search': query,
+                'language': 'de',  # Start with German
+                'format': 'json',
+                'limit': 1  # Just get the best match
+            }
             
-            # TERMDAT API search endpoint - search without language restrictions to get multilingual results
+            response = requests.get(self.wikidata_base_url, params=search_params, timeout=10, verify=self.verify_ssl)
+            if response.status_code == 200:
+                data = response.json()
+                if 'search' in data and data['search']:
+                    entity_id = data['search'][0].get('id')
+                    if entity_id:
+                        # Get related entities using Wikidata properties
+                        related_terms = self._get_wikidata_related_terms(entity_id)
+                        synonyms.update(related_terms)
+                        
+        except Exception as e:
+            logging.debug(f"Error discovering Wikidata synonyms for '{query}': {e}")
+        
+        return list(synonyms)[:limit]
+    
+    def _get_wikidata_related_terms(self, entity_id):
+        """Get related terms from Wikidata using semantic properties"""
+        related_terms = set()
+        
+        try:
+            # Query for the entity and its claims (relationships)
+            query_params = {
+                'action': 'wbgetentities',
+                'ids': entity_id,
+                'props': 'claims|labels|aliases',
+                'languages': 'de|en',
+                'format': 'json'
+            }
+            
+            response = requests.get(self.wikidata_base_url, params=query_params, timeout=10, verify=self.verify_ssl)
+            if response.status_code == 200:
+                data = response.json()
+                if 'entities' in data and entity_id in data['entities']:
+                    entity = data['entities'][entity_id]
+                    
+                    # Extract aliases (alternative names)
+                    if 'aliases' in entity:
+                        for lang in ['de', 'en']:
+                            if lang in entity['aliases']:
+                                for alias in entity['aliases'][lang]:
+                                    if 'value' in alias:
+                                        related_terms.add(alias['value'])
+                    
+                    # Look for specific semantic relationships in claims
+                    if 'claims' in entity:
+                        claims = entity['claims']
+                        
+                        # Common properties that indicate related concepts:
+                        # P31: instance of, P279: subclass of, P361: part of, P527: has part
+                        # P1889: different from, P460: said to be the same as
+                        semantic_properties = ['P31', 'P279', 'P361', 'P527', 'P1889', 'P460']
+                        
+                        for prop in semantic_properties:
+                            if prop in claims:
+                                for claim in claims[prop][:2]:  # Limit to 2 per property
+                                    if 'mainsnak' in claim and 'datavalue' in claim['mainsnak']:
+                                        if 'value' in claim['mainsnak']['datavalue']:
+                                            target_id = claim['mainsnak']['datavalue']['value'].get('id')
+                                            if target_id:
+                                                # Get label for the related entity
+                                                related_label = self._get_wikidata_entity_label(target_id)
+                                                if related_label:
+                                                    related_terms.add(related_label)
+                        
+        except Exception as e:
+            logging.debug(f"Error getting Wikidata related terms for {entity_id}: {e}")
+        
+        return related_terms
+    
+    def _get_wikidata_entity_label(self, entity_id):
+        """Get the German label for a Wikidata entity"""
+        try:
+            params = {
+                'action': 'wbgetentities',
+                'ids': entity_id,
+                'props': 'labels',
+                'languages': 'de|en',
+                'format': 'json'
+            }
+            
+            response = requests.get(self.wikidata_base_url, params=params, timeout=5, verify=self.verify_ssl)
+            if response.status_code == 200:
+                data = response.json()
+                if 'entities' in data and entity_id in data['entities']:
+                    entity = data['entities'][entity_id]
+                    if 'labels' in entity:
+                        # Prefer German, fallback to English
+                        for lang in ['de', 'en']:
+                            if lang in entity['labels'] and 'value' in entity['labels'][lang]:
+                                return entity['labels'][lang]['value']
+        except Exception as e:
+            logging.debug(f"Error getting label for entity {entity_id}: {e}")
+        
+        return None
+    
+    def _discover_synonyms_from_termdat(self, query, limit=2):
+        """Discover related terms by analyzing TERMDAT search results for semantic similarity"""
+        related_terms = set()
+        
+        try:
+            # Do a broader search in TERMDAT to find related concepts
             url = "https://www.termdat.bk.admin.ch/api/Search/Search"
-            
-            # Build parameters for broad search
             params = {
                 'pageindex': 1,
-                'pagesize': 15,  # Get more results
+                'pagesize': 20,  # Get more results for analysis
                 'phrase': query,
                 'offices': 1,
                 'officesPriority': 'true',
@@ -54,7 +155,7 @@ class KeywordGenerator:
                 'fields.name': 'true',
                 'fields.abbreviation': 'true',
                 'fields.phraseology': 'true',
-                'fields.definition': 'false',
+                'fields.definition': 'true',  # Include definitions for semantic analysis
                 'fields.note': 'false',
                 'fields.context': 'false',
                 'fields.source': 'false',
@@ -63,84 +164,373 @@ class KeywordGenerator:
                 'fields.comment': 'false'
             }
             
-            logging.debug(f"TERMDAT Search Request (broad): {url}")
-            
             response = requests.get(url, params=params, timeout=10, verify=self.verify_ssl)
-            
             if response.status_code == 200:
-                try:
-                    data = response.json()
+                data = response.json()
+                if 'searchEntries' in data and isinstance(data['searchEntries'], list):
+                    query_lower = query.lower()
                     
-                    # Process search entries from the response
-                    if 'searchEntries' in data and isinstance(data['searchEntries'], list):
-                        for entry in data['searchEntries']:
-                            entry_id = entry.get('id')
-                            if not entry_id:
-                                continue
-                            
-                            # Extract multilingual terms from this entry
-                            multilingual_terms = {}
-                            
-                            if 'terms' in entry and isinstance(entry['terms'], list):
-                                for term_obj in entry['terms']:
-                                    lang_id = term_obj.get('languageId')
-                                    if lang_id in language_map:
-                                        lang_code = language_map[lang_id]
+                    for entry in data['searchEntries']:
+                        if 'terms' in entry and isinstance(entry['terms'], list):
+                            for term_obj in entry['terms']:
+                                term_text = term_obj.get('terminus', '').strip()
+                                if term_text and term_text.lower() != query_lower:
+                                    # Check if this term is semantically related
+                                    if self._is_semantically_related(query, term_text, entry):
+                                        related_terms.add(term_text)
                                         
-                                        # Get term from terminus field
-                                        term_text = term_obj.get('terminus', '').strip()
-                                        
-                                        if term_text:
-                                            multilingual_terms[lang_code] = term_text
-                            
-                            # Only include entries that have meaningful multilingual coverage
-                            # Require at least German and one other language from our core set (fr, it, en)
-                            core_languages = {'de', 'fr', 'it', 'en'}
-                            available_core_langs = set(multilingual_terms.keys()) & core_languages
-                            
-                            if 'de' in available_core_langs and len(available_core_langs) >= 2:
-                                # Get collection info
-                                collection_name = ''
-                                if 'collection' in entry and 'name' in entry['collection']:
-                                    collection_name = entry['collection']['name']
-                                
-                                # Build the TERMDAT URI
-                                termdat_uri = f"https://register.ld.admin.ch/termdat/{entry_id}"
-                                
-                                # Get a suitable description
-                                description = f"TERMDAT entry for '{query}'"
-                                if collection_name:
-                                    description = f"TERMDAT: {collection_name}"
-                                
-                                # Track which languages are available
-                                available_languages_list = list(multilingual_terms.keys())
-                                
-                                logging.debug(f"Adding TERMDAT result for entry {entry_id} with languages {available_languages_list}: {multilingual_terms}")
-                                
-                                results.append({
-                                    'source': 'TERMDAT',
-                                    'multilingual_label': multilingual_terms,
-                                    'uri': termdat_uri,
-                                    'description': description,
-                                    'entry_id': entry_id,
-                                    'query_lang': query_lang,
-                                    'available_languages': available_languages_list
-                                })
-                            else:
-                                logging.debug(f"Skipping TERMDAT entry {entry_id} - insufficient core language coverage. Available: {available_core_langs}")
-                                
-                except Exception as e:
-                    logging.error(f"Error parsing TERMDAT response: {e}")
-            else:
-                logging.error(f"TERMDAT API returned non-200 status: {response.status_code}")
-                
+        except Exception as e:
+            logging.debug(f"Error discovering TERMDAT synonyms for '{query}': {e}")
+        
+        return list(related_terms)[:limit]
+    
+    def _is_semantically_related(self, original_query, candidate_term, termdat_entry):
+        """Determine if a candidate term is semantically related to the original query"""
+        # Simple heuristics for semantic relatedness:
+        
+        # 1. Check if they appear in the same collection (domain similarity)
+        collection_name = ''
+        if 'collection' in termdat_entry and 'name' in termdat_entry['collection']:
+            collection_name = termdat_entry['collection']['name'].lower()
+        
+        # 2. Check for shared word stems (basic linguistic similarity)
+        original_words = set(original_query.lower().split())
+        candidate_words = set(candidate_term.lower().split())
+        
+        # If they share at least one significant word (>2 chars), they might be related
+        shared_words = original_words & candidate_words
+        significant_shared = any(len(word) > 2 for word in shared_words)
+        
+        # 3. Check for common prefixes/suffixes (compound words in German)
+        has_common_affix = False
+        for orig_word in original_words:
+            for cand_word in candidate_words:
+                if len(orig_word) > 3 and len(cand_word) > 3:
+                    # Check for common prefix (first 4+ chars)
+                    if orig_word[:4] == cand_word[:4]:
+                        has_common_affix = True
+                    # Check for common suffix (last 4+ chars)
+                    elif orig_word[-4:] == cand_word[-4:]:
+                        has_common_affix = True
+        
+        # 4. Length similarity (avoid very short or very long terms)
+        length_ratio = min(len(original_query), len(candidate_term)) / max(len(original_query), len(candidate_term))
+        reasonable_length = length_ratio > 0.3
+        
+        # Term is related if it meets multiple criteria
+        return (significant_shared or has_common_affix) and reasonable_length
+    
+    def _termdat_candidate_exists(self, candidate):
+        """Lightweight TERMDAT check: return True if TERMDAT contains the candidate term (any language).
+        This avoids invoking the heavier search_termdat which may loop back to synonyms.
+        """
+        try:
+            url = "https://www.termdat.bk.admin.ch/api/Search/Search"
+            params = {
+                'pageindex': 1,
+                'pagesize': 5,
+                'phrase': candidate,
+                'offices': 1,
+                'status': 1,
+                'fields.term': 'true',
+                'fields.definition': 'false'
+            }
+            resp = requests.get(url, params=params, timeout=8, verify=self.verify_ssl)
+            if resp.status_code == 200:
+                data = resp.json()
+                if 'searchEntries' in data and isinstance(data['searchEntries'], list):
+                    for entry in data['searchEntries']:
+                        if 'terms' in entry and isinstance(entry['terms'], list):
+                            for term_obj in entry['terms']:
+                                term_text = term_obj.get('terminus', '')
+                                if term_text and term_text.strip().lower() == candidate.strip().lower():
+                                    return True
+        except Exception as e:
+            logging.debug(f"TERMDAT existence check failed for '{candidate}': {e}")
+        return False
+
+    def _get_synonym_queries(self, query):
+        """Get synonym queries using an LLM (OpenAI) when available, then validate candidates
+        against Wikidata and TERMDAT. Falls back to linked-data discovery if needed.
+        Implements a simple cache to avoid repeated identical network/LLM calls.
+        """
+        query = query.strip()
+
+        # Simple cache: avoid repeated identical synonym lookups for the same query
+        cache_key = f"synonyms:{query.lower()}"
+        try:
+            cached = cache.get(cache_key)
+            if cached:
+                logging.debug(f"Returning cached synonyms for '{query}'")
+                return cached
+        except Exception as e:
+            logging.debug(f"Synonym cache read failed for '{query}': {e}")
+
+        candidates = []
+
+        # Try OpenAI if API key is available
+        openai_key = os.environ.get('OPENAI_API_KEY')
+        if openai_key:
+            try:
+                prompt = (
+                    f"Provide up to 5 German synonyms or closely related short phrases for the term: '{query}'. "
+                    "Return the result as a JSON array of strings only. Prefer single-word synonyms when possible."
+                )
+
+                headers = {
+                    'Authorization': f'Bearer {openai_key}',
+                    'Content-Type': 'application/json'
+                }
+                payload = {
+                    'model': 'gpt-3.5-turbo',
+                    'messages': [
+                        {'role': 'system', 'content': 'You are a helpful assistant that outputs a JSON array of strings.'},
+                        {'role': 'user', 'content': prompt}
+                    ],
+                    'max_tokens': 200,
+                    'temperature': 0.2,
+                    'n': 1
+                }
+
+                resp = requests.post('https://api.openai.com/v1/chat/completions', headers=headers, json=payload, timeout=15)
+                if resp.ok:
+                    body = resp.json()
+                    text = ''
+                    try:
+                        text = body['choices'][0]['message']['content']
+                    except Exception:
+                        text = body.get('choices', [{}])[0].get('text', '')
+
+                    # Try parsing JSON from assistant
+                    try:
+                        parsed = json.loads(text)
+                        if isinstance(parsed, list):
+                            candidates = [s for s in parsed if isinstance(s, str)]
+                    except Exception:
+                        # Fallback: split by common separators and clean
+                        parts = re.split('[,;\n\r]', text)
+                        candidates = [p.strip().strip('"\'') for p in parts if p.strip()]
+
+            except Exception as e:
+                logging.debug(f"OpenAI synonym generation failed for '{query}': {e}")
+
+        # Validate candidates using Wikidata and TERMDAT; keep those that are found in at least one
+        validated = []
+        for cand in candidates[:5]:  # only check up to 5 candidates from LLM to save calls
+            try:
+                found_in_wikidata = False
+                found_in_termdat = False
+
+                # Check Wikidata via existing search_wikidata (safe to call)
+                try:
+                    wd = self.search_wikidata(cand)
+                    if wd and len(wd) > 0:
+                        found_in_wikidata = True
+                except Exception:
+                    found_in_wikidata = False
+
+                # Check TERMDAT via lightweight existence check
+                try:
+                    if self._termdat_candidate_exists(cand):
+                        found_in_termdat = True
+                except Exception:
+                    found_in_termdat = False
+
+                if found_in_wikidata or found_in_termdat:
+                    validated.append(cand)
+            except Exception as e:
+                logging.debug(f"Error validating candidate '{cand}': {e}")
+
+        # If no validated candidates from OpenAI, fall back to linked data discovery
+        if not validated:
+            logging.debug(f"No validated OpenAI candidates for '{query}', falling back to linked-data discovery")
+            wikidata_synonyms = self._discover_synonyms_from_wikidata(query, limit=3)
+            termdat_synonyms = self._discover_synonyms_from_termdat(query, limit=3)
+            combined = list(dict.fromkeys(wikidata_synonyms + termdat_synonyms))
+            result = combined[:5]
+
+            # Cache the fallback result for a short period to avoid repeated discovery calls
+            try:
+                cache.set(cache_key, result, timeout=3600)  # 1 hour
+            except Exception as e:
+                logging.debug(f"Synonym cache write failed for '{query}': {e}")
+
+            return result
+
+        # Return up to 5 validated synonyms and cache them
+        logging.debug(f"OpenAI validated synonyms for '{query}': {validated}")
+        result = validated[:5]
+        try:
+            cache.set(cache_key, result, timeout=3600)  # 1 hour cache
+        except Exception as e:
+            logging.debug(f"Synonym cache write failed for '{query}': {e}")
+        return result
+    
+    def search_termdat(self, query, query_lang='de', include_synonyms=True, max_results=10):
+        """Search TERMDAT for keywords using the official API with multilingual support and synonym expansion
+        This version limits pagesize and stops early when enough results have been gathered to reduce API calls.
+        """
+        results = []
+        processed_entry_ids = set()  # Track processed entries to avoid duplicates
+
+        # Lowercase the query language
+        query_lang = query_lang.lower()
+
+        # Prepare search queries: original + synonyms (limit synonyms to 2 to reduce calls)
+        search_queries = [query]
+        if include_synonyms:
+            synonyms = self._get_synonym_queries(query)
+            # Keep at most 2 synonyms to reduce number of API calls
+            search_queries.extend(synonyms[:2])
+            logging.debug(f"TERMDAT searching for: {query} + synonyms: {synonyms[:2]}")
+
+        try:
+            # Map language IDs to codes
+            # 2=DE, 3=EN, 6=FR, 7=IT, 8=RM
+            # Note: Excluding Spanish (4=ES) as I14Y platform cannot handle it
+            language_map = {2: 'de', 6: 'fr', 7: 'it', 3: 'en', 8: 'rm'}
+
+            # Search for each query (original + synonyms)
+            for search_query in search_queries:
+                # TERMDAT API search endpoint - search without language restrictions to get multilingual results
+                url = "https://www.termdat.bk.admin.ch/api/Search/Search"
+
+                # Build parameters for broad search but smaller pagesize
+                params = {
+                    'pageindex': 1,
+                    'pagesize': 5,  # smaller pagesize to reduce payload
+                    'phrase': search_query,
+                    'offices': 1,
+                    'officesPriority': 'true',
+                    'status': 1,
+                    'statusPriority': 'true',
+                    'fields.term': 'true',
+                    'fields.name': 'true',
+                    'fields.abbreviation': 'true',
+                    'fields.phraseology': 'true',
+                    'fields.definition': 'false',
+                    'fields.note': 'false',
+                    'fields.context': 'false',
+                    'fields.source': 'false',
+                    'fields.metadata': 'true',
+                    'fields.country': 'false',
+                    'fields.comment': 'false'
+                }
+
+                logging.debug(f"TERMDAT Search Request for '{search_query}': {url}")
+
+                response = requests.get(url, params=params, timeout=8, verify=self.verify_ssl)
+
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+
+                        # Process search entries from the response
+                        if 'searchEntries' in data and isinstance(data['searchEntries'], list):
+                            for entry in data['searchEntries']:
+                                # Stop early if we've gathered enough results
+                                if len(results) >= max_results:
+                                    logging.debug("Reached max_results in TERMDAT search, stopping further processing")
+                                    break
+
+                                entry_id = entry.get('id')
+                                if not entry_id or entry_id in processed_entry_ids:
+                                    continue
+
+                                processed_entry_ids.add(entry_id)
+
+                                # Extract multilingual terms from this entry
+                                multilingual_terms = {}
+
+                                if 'terms' in entry and isinstance(entry['terms'], list):
+                                    for term_obj in entry['terms']:
+                                        lang_id = term_obj.get('languageId')
+                                        if lang_id in language_map:
+                                            lang_code = language_map[lang_id]
+
+                                            # Get term from terminus field
+                                            term_text = term_obj.get('terminus', '').strip()
+
+                                            if term_text:
+                                                multilingual_terms[lang_code] = term_text
+
+                                # Only include entries that have meaningful multilingual coverage
+                                # Require at least German and one other language from our core set (fr, it, en)
+                                core_languages = {'de', 'fr', 'it', 'en'}
+                                available_core_langs = set(multilingual_terms.keys()) & core_languages
+
+                                if 'de' in available_core_langs and len(available_core_langs) >= 2:
+                                    # Get collection info
+                                    collection_name = ''
+                                    if 'collection' in entry and 'name' in entry['collection']:
+                                        collection_name = entry['collection']['name']
+
+                                    # Build the TERMDAT URI
+                                    termdat_uri = f"https://register.ld.admin.ch/termdat/{entry_id}"
+
+                                    # Get a suitable description
+                                    description = f"TERMDAT entry for '{query}'"
+                                    if collection_name:
+                                        description = f"TERMDAT: {collection_name}"
+
+                                    # Track which languages are available
+                                    available_languages_list = list(multilingual_terms.keys())
+
+                                    # Mark if this was found via synonym search
+                                    is_synonym_result = search_query != query
+
+                                    logging.debug(f"Adding TERMDAT result for entry {entry_id} with languages {available_languages_list}: {multilingual_terms}")
+
+                                    results.append({
+                                        'source': 'TERMDAT',
+                                        'multilingual_label': multilingual_terms,
+                                        'uri': termdat_uri,
+                                        'description': description,
+                                        'entry_id': entry_id,
+                                        'query_lang': query_lang,
+                                        'available_languages': available_languages_list,
+                                        'is_synonym_result': is_synonym_result,
+                                        'found_via_query': search_query
+                                    })
+                                else:
+                                    logging.debug(f"Skipping TERMDAT entry {entry_id} - insufficient core language coverage. Available: {available_core_langs}")
+
+                    except Exception as e:
+                        logging.error(f"Error parsing TERMDAT response for '{search_query}': {e}")
+                else:
+                    logging.error(f"TERMDAT API returned non-200 status for '{search_query}': {response.status_code}")
+
         except Exception as e:
             logging.error(f"Error searching TERMDAT: {e}")
-        
-        # Sort results by number of available languages (most multilingual first)
-        results.sort(key=lambda x: len(x['available_languages']), reverse=True)
-        
-        logging.debug(f"TERMDAT total results: {len(results)}")
+
+        # Sort results: exact matches first, then synonym matches, then by number of available languages
+        def sort_key(result):
+            # Check if any term in any language is an exact match (case-insensitive)
+            query_lower = query.lower()
+            multilingual_terms = result.get('multilingual_label', {})
+
+            # Check for exact match in any language
+            has_exact_match = any(
+                term.lower() == query_lower 
+                for term in multilingual_terms.values()
+            )
+
+            # Check if this was found via synonym
+            is_synonym_result = result.get('is_synonym_result', False)
+
+            # Return tuple: (exact_match_priority, synonym_priority, language_count)
+            # exact_match_priority: 0 for exact matches (highest priority), 1 for others
+            # synonym_priority: 0 for original query results, 1 for synonym results
+            # language_count: negative so more languages = higher priority
+            return (
+                0 if has_exact_match else 1,
+                1 if is_synonym_result else 0,
+                -len(result['available_languages'])
+            )
+
+        results.sort(key=sort_key)
+
+        logging.debug(f"TERMDAT total results: {len(results)} (original + synonyms)")
         return results
 
     def search_gemet(self, query):
@@ -244,7 +634,7 @@ class KeywordGenerator:
                 'search': query,
                 'language': 'en',
                 'format': 'json',
-                'limit': 5
+                'limit': 3
             }
             
             search_response = requests.get(self.wikidata_base_url, params=search_params, timeout=10, verify=self.verify_ssl)
@@ -338,23 +728,67 @@ class KeywordGenerator:
         
         return i14y_keywords
 
-    def generate_keywords(self, query, query_lang='de'):
-        """Generate keywords following DCAT-AP CH priority cascade"""
+    def generate_keywords(self, query, query_lang='de', include_synonyms=True):
+        """Generate keywords following DCAT-AP CH priority cascade with exact match prioritization and synonym support"""
         all_keywords = []
         
-        # Priority 1: TERMDAT (multilingual)
-        termdat_results = self.search_termdat(query, query_lang)
+        logging.info(f"Starting keyword generation for: '{query}' in language: {query_lang}")
+        if include_synonyms:
+            synonyms = self._get_synonym_queries(query)
+            logging.info(f"Including synonyms: {synonyms}")
+        
+        # Priority 1: TERMDAT (multilingual) - with synonym support
+        termdat_results = self.search_termdat(query, query_lang, include_synonyms)
         all_keywords.extend(termdat_results)
         
-        # Priority 2: GEMET (multilingual)
+        # Priority 2: GEMET (multilingual) - TODO: add synonym support
         gemet_results = self.search_gemet(query)
         all_keywords.extend(gemet_results)
         
-        # Priority 3: Wikidata (multilingual)
+        # Priority 3: Wikidata (multilingual) - TODO: add synonym support
         wikidata_results = self.search_wikidata(query)
         all_keywords.extend(wikidata_results)
         
-        return all_keywords
+        # Sort all results: exact matches first, then by synonym priority, then by source priority
+        def sort_key(result):
+            query_lower = query.lower()
+            multilingual_terms = result.get('multilingual_label', {})
+            
+            # Check for exact match in any language
+            has_exact_match = any(
+                term.lower() == query_lower 
+                for term in multilingual_terms.values()
+            )
+            
+            # Check if this was found via synonym search
+            is_synonym_result = result.get('is_synonym_result', False)
+            
+            # Source priority mapping
+            source_priority = {
+                'TERMDAT': 0,
+                'GEMET': 1, 
+                'Wikidata': 2
+            }
+            
+            source = result.get('source', 'Unknown')
+            source_rank = source_priority.get(source, 999)
+            
+            # Return tuple: (exact_match_priority, synonym_priority, source_priority, negative_language_count)
+            # exact_match_priority: 0 for exact matches (highest priority), 1 for others
+            # synonym_priority: 0 for original query results, 1 for synonym results
+            # source_priority: 0 for TERMDAT (highest), 1 for GEMET, 2 for Wikidata
+            # negative_language_count: more languages = higher priority
+            return (
+                0 if has_exact_match else 1,
+                1 if is_synonym_result else 0,
+                source_rank,
+                -len(result.get('available_languages', []))
+            )
+        
+        all_keywords.sort(key=sort_key)
+        
+        # Limit final results to 10
+        return all_keywords[:10]
 keyword_generator = KeywordGenerator()
 
 @app.route('/')
@@ -365,18 +799,19 @@ def index():
 def search_keywords():
     query = request.json.get('query', '').strip()
     query_lang = request.json.get('lang', 'de').strip().lower()
+    include_synonyms = request.json.get('include_synonyms', True)  # Default to True
     
     if not query:
         return jsonify({'error': 'Query is required'}), 400
     
-    # Check cache first
-    cache_key = f"{query}:{query_lang}"
+    # Check cache first (include synonyms in cache key)
+    cache_key = f"{query}:{query_lang}:{include_synonyms}"
     cached_result = cache.get(cache_key)
     if cached_result:
         return jsonify(cached_result)
 
     try:
-        keywords = keyword_generator.generate_keywords(query, query_lang)
+        keywords = keyword_generator.generate_keywords(query, query_lang, include_synonyms)
         i14y_keywords = keyword_generator._convert_to_i14y_format(keywords)
         
         # Ensure all keywords are JSON serializable
@@ -391,7 +826,9 @@ def search_keywords():
                     'description': kw.get('description', ''),
                     'entry_id': kw.get('entry_id', ''),
                     'query_lang': kw.get('query_lang', query_lang),
-                    'available_languages': kw.get('available_languages', list(kw.get('multilingual_label', {}).keys()))
+                    'available_languages': kw.get('available_languages', list(kw.get('multilingual_label', {}).keys())),
+                    'is_synonym_result': kw.get('is_synonym_result', False),
+                    'found_via_query': kw.get('found_via_query', query)
                 }
                 sanitized_keywords.append(sanitized_kw)
             except Exception as e:
@@ -400,9 +837,11 @@ def search_keywords():
         result = {
             'query': query,
             'query_lang': query_lang,
+            'include_synonyms': include_synonyms,
             'keywords': sanitized_keywords,  # Use sanitized keywords
             'i14y_keywords': i14y_keywords,  # I14Y-ready format for upload
-            'total': len(sanitized_keywords)
+            'total': len(sanitized_keywords),
+            'synonym_count': len([k for k in sanitized_keywords if k.get('is_synonym_result', False)])
         }
         
         # Test JSON serialization before caching

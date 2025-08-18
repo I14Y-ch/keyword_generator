@@ -34,16 +34,22 @@
             width: 100%;
             height: 100%;
             background-color: rgba(0,0,0,0.5);
+            align-items: center; /* center content vertically */
+            justify-content: center; /* center content horizontally */
+            overflow: auto; /* allow scrolling for tall content */
         }
         
         .modal-content {
             background-color: #fefefe;
-            margin: 10% auto;
+            margin: 0 20px;
             padding: 20px;
             border-radius: 8px;
             width: 80%;
             max-width: 600px;
+            max-height: 90vh;
+            overflow-y: auto;
             position: relative;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
         }
         
         .modal-close {
@@ -100,6 +106,27 @@
         .language-indicators {
             margin-bottom: 8px;
         }
+        
+        .synonym-result {
+            border-left: 3px solid #28a745 !important;
+        }
+        
+        .synonym-indicator {
+            margin-bottom: 8px;
+        }
+
+        /* Status message area shown during search phases */
+        .status {
+            margin-top: 12px;
+            font-size: 14px;
+            color: #333;
+        }
+        .status small {
+            display: block;
+            color: #666;
+            margin-top: 4px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -115,6 +142,13 @@
             <div class="search-container">
                 <input type="text" id="searchInput" class="search-input" 
                        placeholder="Enter a term to generate keywords..." />
+                <div class="search-options" style="margin: 10px 0;">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                        <input type="checkbox" id="includeSynonyms" checked>
+                        <span>Include synonyms and related terms</span>
+                        <span id="synonymInfoBtn" class="info-icon" title="Learn about synonym support" style="font-size: 10px; width: 14px; height: 14px; line-height: 14px; cursor: pointer;">?</span>
+                    </label>
+                </div>
                 <div class="button-group">
                     <button id="searchBtn" class="search-btn">Generate Keywords</button>
                     <button id="showJsonBtn" class="search-btn" disabled>Show JSON</button>
@@ -137,6 +171,9 @@
             <div class="spinner"></div>
             <p>Searching for keywords...</p>
         </div>
+
+        <!-- Status message area shows the current script phase to the user -->
+        <div id="statusMessage" class="status" style="display:none;"></div>
 
         <div id="error" class="error" style="display: none;"></div>
 
@@ -161,9 +198,39 @@
                 <p><strong>Semantic URIs:</strong> Each keyword includes its original URI from the source vocabulary for semantic web compatibility.</p>
             </div>
         </div>
+
+        <!-- Modal for Synonym Discovery Information -->
+        <div id="synonymModal" class="modal">
+            <div class="modal-content">
+                <span class="modal-close" onclick="closeSynonymModal()">&times;</span>
+                <h3>Synonym Discovery & Related Terms</h3>
+                <p>This tool dynamically discovers synonyms and related terms using authoritative linked-data sources and terminology services. Key points:</p>
+                <ul>
+                    <li><strong>Wikidata relationships</strong>: Uses properties like "subclass of", "part of" and aliases to find related concepts.</li>
+                    <li><strong>TERMDAT analysis</strong>: Finds related terms in the same terminology collections and analyzes definitions for similarity.</li>
+                    <li><strong>Quality filters</strong>: Short/irrelevant results are filtered; only a small set of the best matches are used.</li>
+                </ul>
+                <p>Results discovered via related-term search are marked in the UI (green indicator) and show which query they were found from.</p>
+            </div>
+        </div>
     </div>
 
     <script>
+        // Helper to show brief status messages to the user about what the script is doing
+        function setStatus(message) {
+            const elm = document.getElementById('statusMessage');
+            if (!elm) return;
+            elm.textContent = message;
+            elm.style.display = 'block';
+        }
+
+        function clearStatus() {
+            const elm = document.getElementById('statusMessage');
+            if (!elm) return;
+            elm.textContent = '';
+            elm.style.display = 'none';
+        }
+
         const searchInput = document.getElementById('searchInput');
         const searchBtn = document.getElementById('searchBtn');
         const showJsonBtn = document.getElementById('showJsonBtn');
@@ -178,6 +245,20 @@
 
         const selectedKeywords = new Set();
         const searchHistory = [];
+
+        // Attach click handler for synonym info button (robust fallback)
+        const synonymInfoBtn = document.getElementById('synonymInfoBtn');
+        if (synonymInfoBtn) {
+            synonymInfoBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                try {
+                    showSynonymInfo();
+                } catch (err) {
+                    console.warn('Error opening synonym info modal, falling back to alert:', err);
+                    alert('Synonym Discovery:\n\n• Wikidata relationships and TERMDAT analysis are used to find related terms.\n• Results are discovered dynamically from authoritative sources.');
+                }
+            });
+        }
 
         searchBtn.addEventListener('click', performSearch);
         searchInput.addEventListener('keypress', (e) => {
@@ -223,9 +304,20 @@
 
             hideError();
             showLoading();
+            setStatus('Preparing query...');
             hideResults();
 
             try {
+                const includeSynonyms = document.getElementById('includeSynonyms').checked;
+                // Inform the user whether synonyms will be included
+                if (includeSynonyms) {
+                    setStatus('Looking for synonyms...');
+                } else {
+                    setStatus('Skipping synonym expansion');
+                }
+
+                // Next stage: querying backend services
+                setStatus('Querying keyword services (TERMDAT, Wikidata, GEMET)...');
                 const response = await fetch('/search', {
                     method: 'POST',
                     headers: {
@@ -233,7 +325,8 @@
                     },
                     body: JSON.stringify({ 
                         query: query,
-                        lang: 'de'  // Default to German as query language
+                        lang: 'de',  // Default to German as query language
+                        include_synonyms: includeSynonyms
                     })
                 });
 
@@ -245,6 +338,7 @@
 
                 try {
                     const data = await response.json();
+                    setStatus('Rendering results...');
                     displayResults(data);
                     updateSearchHistory(query);
                 } catch (jsonError) {
@@ -256,6 +350,8 @@
                 showError(err.message || 'Search failed. Please try again.');
             } finally {
                 hideLoading();
+                // Clear the status after a short delay so users can see the final state
+                setTimeout(() => clearStatus(), 1200);
             }
         }
 
@@ -306,7 +402,12 @@
                 return;
             }
 
-            resultsCount.textContent = `${data.total || 0} keywords found`;
+            // Update results count to include synonym information
+            let countText = `${data.total || 0} keywords found`;
+            if (data.synonym_count && data.synonym_count > 0) {
+                countText += ` (${data.synonym_count} via synonyms)`;
+            }
+            resultsCount.textContent = countText;
 
             if (!data.keywords.length) {
                 keywordGrid.innerHTML = '<div class="no-results">No keywords found for your search term.</div>';
@@ -349,10 +450,21 @@
                             ).join('')}</div>`;
                         }
                         
+                        // Add synonym indicator if this result was found via synonym search
+                        let synonymIndicator = '';
+                        if (keyword.is_synonym_result && keyword.found_via_query !== data.query) {
+                            synonymIndicator = `<div class="synonym-indicator" title="Found via synonym search: ${keyword.found_via_query}">
+                                <span style="background: #28a745; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
+                                    ↗ via "${keyword.found_via_query}"
+                                </span>
+                            </div>`;
+                        }
+                        
                         return `
-                            <div class="keyword-card" id="keyword-${index}" onclick="toggleKeywordSelection('keyword-${index}', window.keywordsData[${index}])">
+                            <div class="keyword-card ${keyword.is_synonym_result ? 'synonym-result' : ''}" id="keyword-${index}" onclick="toggleKeywordSelection('keyword-${index}', window.keywordsData[${index}])">
                                 <div class="keyword-source ${keyword.source.toLowerCase()}">${keyword.source}</div>
                                 <div class="keyword-label">${displayLabel}</div>
+                                ${synonymIndicator}
                                 ${languageIndicators}
                                 ${keyword.description ? `<div class="keyword-description">${keyword.description}</div>` : ''}
                                 ${keyword.uri ? `
@@ -378,29 +490,31 @@
             loading.style.display = 'block';
             searchBtn.disabled = true;
         }
-
+ 
         function hideLoading() {
             loading.style.display = 'none';
             searchBtn.disabled = false;
         }
-
+ 
         function showResults() {
             resultsSection.style.display = 'block';
+            // clear status when results are visible
+            clearStatus();
         }
-
+ 
         function hideResults() {
             resultsSection.style.display = 'none';
         }
-
+ 
         function showError(message) {
             error.textContent = message;
             error.style.display = 'block';
         }
-
+ 
         function hideError() {
             error.style.display = 'none';
         }
-
+ 
         function updateSearchHistory(query) {
             searchHistory.push(query);
             const historyItem = document.createElement('li');
@@ -408,10 +522,10 @@
             searchHistoryList.appendChild(historyItem);
             searchHistorySection.style.display = 'block';
         }
-
+ 
         // Initialize button states - both JSON and Upload buttons disabled until search
         updateButtonVisibility();
-
+ 
         connectI14YBtn.addEventListener('click', () => {
             // Save selected keywords to localStorage before redirecting to upload page
             if (selectedKeywords.size === 0) {
@@ -451,20 +565,57 @@
             // Redirect directly to upload page
             window.location.href = '/upload';
         });
-
+ 
         function openModal() {
-            document.getElementById('dcatModal').style.display = 'block';
+            const m = document.getElementById('dcatModal');
+            if (m) {
+                m.style.display = 'flex';
+                document.body.style.overflow = 'hidden';
+            }
         }
-
+ 
         function closeModal() {
-            document.getElementById('dcatModal').style.display = 'none';
+            const m = document.getElementById('dcatModal');
+            if (m) {
+                m.style.display = 'none';
+                document.body.style.overflow = '';
+            }
+        }
+ 
+        function openSynonymModal() {
+            const m = document.getElementById('synonymModal');
+            if (m) {
+                m.style.display = 'flex';
+                document.body.style.overflow = 'hidden';
+            }
+        }
+ 
+        function closeSynonymModal() {
+            const m = document.getElementById('synonymModal');
+            if (m) {
+                m.style.display = 'none';
+                document.body.style.overflow = '';
+            }
+        }
+        
+        function showSynonymInfo() {
+            const m = document.getElementById('synonymModal');
+            if (m) {
+                m.style.display = 'flex';
+            } else {
+                // Fallback to alert if modal is not available (ensures user sees info)
+                alert('Synonym Discovery:\n\n• Wikidata Relationships: Finds semantically related terms using linked data properties like "subclass of", "part of", and aliases\n• TERMDAT Analysis: Discovers related terms from the same domain collections and identifies linguistic similarities\n• Dynamic Discovery: No manual maintenance required - synonyms are discovered from authoritative sources in real-time');
+            }
         }
 
         // Close modal when clicking outside of it
         window.onclick = function(event) {
-            const modal = document.getElementById('dcatModal');
-            if (event.target === modal) {
+            const dcatModal = document.getElementById('dcatModal');
+            const synonymModal = document.getElementById('synonymModal');
+            if (event.target === dcatModal) {
                 closeModal();
+            } else if (event.target === synonymModal) {
+                closeSynonymModal();
             }
         }
 
@@ -472,6 +623,7 @@
         document.addEventListener('keydown', function(event) {
             if (event.key === 'Escape') {
                 closeModal();
+                closeSynonymModal();
             }
         });
     </script>
