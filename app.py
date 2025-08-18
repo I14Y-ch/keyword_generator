@@ -436,13 +436,14 @@ class KeywordGenerator:
 
             # Search for each query (original + synonyms)
             for search_query in search_queries:
-                # TERMDAT API search endpoint - search without language restrictions to get multilingual results
+                # TERMDAT API search endpoint - use frontend-style parameters to get all collections
                 url = "https://www.termdat.bk.admin.ch/api/Search/Search"
 
-                # Build parameters for broad search but smaller pagesize
-                params = {
+                # Build parameters matching the frontend approach for comprehensive results
+                # Include language IDs to match frontend behavior and access geopolitical collections
+                base_params = {
                     'pageindex': 1,
-                    'pagesize': 5,  # smaller pagesize to reduce payload
+                    'pagesize': 25,  # Use frontend pagesize to get more comprehensive results
                     'phrase': search_query,
                     'offices': 1,
                     'officesPriority': 'true',
@@ -460,10 +461,24 @@ class KeywordGenerator:
                     'fields.country': 'false',
                     'fields.comment': 'false'
                 }
+                
+                # Build URL with multiple language ID parameters (like frontend does)
+                # Language IDs: 2=DE, 3=EN, 6=FR, 7=IT, 8=RM
+                language_ids = [2, 6, 7, 8, 3]  # DE, FR, IT, RM, EN (exclude Spanish=4)
+                params_list = []
+                for key, value in base_params.items():
+                    params_list.append(f"{key}={value}")
+                
+                # Add language parameters as the frontend does (multiple params with same name)
+                for lang_id in language_ids:
+                    params_list.append(f"sourceLanguageIds={lang_id}")
+                    params_list.append(f"targetLanguageIds={lang_id}")
+                
+                full_url = url + "?" + "&".join(params_list)
 
-                logging.debug(f"TERMDAT Search Request for '{search_query}': {url}")
+                logging.debug(f"TERMDAT Search Request for '{search_query}': {full_url}")
 
-                response = requests.get(url, params=params, timeout=8, verify=self.verify_ssl)
+                response = requests.get(full_url, timeout=8, verify=self.verify_ssl)
 
                 if response.status_code == 200:
                     try:
@@ -492,11 +507,17 @@ class KeywordGenerator:
                                         if lang_id in language_map:
                                             lang_code = language_map[lang_id]
 
-                                            # Get term from terminus field
+                                            # Get term from terminus field, fallback to name or abbreviation
                                             term_text = term_obj.get('terminus', '').strip()
+                                            if not term_text:
+                                                term_text = term_obj.get('name', '').strip()
+                                            if not term_text:
+                                                term_text = term_obj.get('abbreviation', '').strip()
 
                                             if term_text:
-                                                multilingual_terms[lang_code] = term_text
+                                                # For duplicate language entries, keep the first non-empty one
+                                                if lang_code not in multilingual_terms:
+                                                    multilingual_terms[lang_code] = term_text
 
                                 # Only include entries that have meaningful multilingual coverage
                                 # Require at least German and one other language from our core set (fr, it, en)

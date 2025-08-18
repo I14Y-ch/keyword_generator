@@ -117,10 +117,58 @@
 
         /* Status message area shown during search phases */
         .status {
-            margin-top: 12px;
+            margin: 15px 0;
+            padding: 12px 16px;
             font-size: 14px;
-            color: #333;
+            color: #2c3e50;
+            background: linear-gradient(135deg, #e8f4fd 0%, #f0f9ff 100%);
+            border: 1px solid #bee3f8;
+            border-radius: 8px;
+            border-left: 4px solid #3182ce;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            animation: statusSlideIn 0.3s ease-out;
         }
+        
+        .status::before {
+            content: "🔍";
+            margin-right: 8px;
+            font-size: 16px;
+        }
+        
+        .status.synonyms::before {
+            content: "🔗";
+        }
+        
+        .status.termdat::before {
+            content: "📚";
+        }
+        
+        .status.wikidata::before {
+            content: "🌐";
+        }
+        
+        .status.gemet::before {
+            content: "🌿";
+        }
+        
+        .status.rendering::before {
+            content: "✨";
+        }
+        
+        @keyframes statusSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
         .status small {
             display: block;
             color: #666;
@@ -204,22 +252,32 @@
             <div class="modal-content">
                 <span class="modal-close" onclick="closeSynonymModal()">&times;</span>
                 <h3>Synonym Discovery & Related Terms</h3>
-                <p>This tool dynamically discovers synonyms and related terms using authoritative linked-data sources and terminology services. Key points:</p>
+                <p>This tool dynamically discovers synonyms and related terms using multiple intelligent sources:</p>
                 <ul>
-                    <li><strong>Wikidata relationships</strong>: Uses properties like "subclass of", "part of" and aliases to find related concepts.</li>
-                    <li><strong>TERMDAT analysis</strong>: Finds related terms in the same terminology collections and analyzes definitions for similarity.</li>
-                    <li><strong>Quality filters</strong>: Short/irrelevant results are filtered; only a small set of the best matches are used.</li>
+                    <li><strong>OpenAI (ChatGPT)</strong>: Primary source using GPT-3.5-turbo to generate contextually relevant German synonyms and related terms, validated against authoritative vocabularies.</li>
+                    <li><strong>Wikidata relationships</strong>: Uses semantic properties like "subclass of", "part of" and aliases to find related concepts from the world's largest linked-data knowledge base.</li>
+                    <li><strong>TERMDAT analysis</strong>: Finds related terms in the same Swiss Federal terminology collections and analyzes definitions for semantic similarity.</li>
+                    <li><strong>Quality validation</strong>: All AI-generated candidates are verified against Wikidata and TERMDAT before inclusion; fallback to linked-data discovery if AI is unavailable.</li>
                 </ul>
-                <p>Results discovered via related-term search are marked in the UI (green indicator) and show which query they were found from.</p>
+                <p><strong>Process:</strong> The system first asks ChatGPT for synonyms, validates them against authoritative sources, and falls back to semantic analysis if needed. Results discovered via synonym search are marked in the UI (green indicator).</p>
             </div>
         </div>
     </div>
 
     <script>
         // Helper to show brief status messages to the user about what the script is doing
-        function setStatus(message) {
+        function setStatus(message, type = 'default') {
             const elm = document.getElementById('statusMessage');
             if (!elm) return;
+            
+            // Clear previous type classes
+            elm.className = 'status';
+            
+            // Add specific type class for icon styling
+            if (type) {
+                elm.classList.add(type);
+            }
+            
             elm.textContent = message;
             elm.style.display = 'block';
         }
@@ -229,6 +287,7 @@
             if (!elm) return;
             elm.textContent = '';
             elm.style.display = 'none';
+            elm.className = 'status';  // Reset classes
         }
 
         const searchInput = document.getElementById('searchInput');
@@ -304,20 +363,20 @@
 
             hideError();
             showLoading();
-            setStatus('Preparing query...');
+            setStatus('Preparing search...', 'default');
             hideResults();
 
             try {
                 const includeSynonyms = document.getElementById('includeSynonyms').checked;
                 // Inform the user whether synonyms will be included
                 if (includeSynonyms) {
-                    setStatus('Looking for synonyms...');
+                    setStatus('Looking for synonyms and related terms...', 'synonyms');
                 } else {
-                    setStatus('Skipping synonym expansion');
+                    setStatus('Skipping synonym expansion', 'default');
                 }
 
                 // Next stage: querying backend services
-                setStatus('Querying keyword services (TERMDAT, Wikidata, GEMET)...');
+                setStatus('Querying TERMDAT, Wikidata, and GEMET...', 'termdat');
                 const response = await fetch('/search', {
                     method: 'POST',
                     headers: {
@@ -338,7 +397,7 @@
 
                 try {
                     const data = await response.json();
-                    setStatus('Rendering results...');
+                    setStatus('Rendering results...', 'rendering');
                     displayResults(data);
                     updateSearchHistory(query);
                 } catch (jsonError) {
