@@ -599,92 +599,352 @@ class KeywordGenerator:
         return results
 
     def search_gemet(self, query):
-        """Search GEMET for keywords with multilingual support"""
+        """Search GEMET for keywords with multilingual support, optimized for geo-related contexts
+        Uses the official GEMET REST API to find concepts and retrieve multilingual labels
+        """
         results = []
         
-        # GEMET language codes mapping
-        gemet_languages = {
-            'de': 'German',
-            'fr': 'French', 
-            'it': 'Italian',
-            'en': 'English'
-        }
+        # Cache key based on the query to avoid repeated identical searches
+        cache_key = f"gemet_results:{query.lower()}"
+        try:
+            cached = cache.get(cache_key)
+            if cached:
+                logging.debug(f"Returning cached GEMET results for '{query}'")
+                return cached
+        except Exception as e:
+            logging.debug(f"GEMET cache read failed for '{query}': {e}")
+        
+        found_concepts = []  # List to store all found concepts
         
         try:
-            # First, search for concepts in English to get concept URIs
+            logging.info(f"Starting GEMET search for '{query}'")
+            
+            # First, search for concepts matching the query using keyword search
             search_url = "https://www.eionet.europa.eu/gemet/getConceptsMatchingKeyword"
-            search_params = {
-                'keyword': query,
-                'search_mode': 'auto',
-                'thesaurus_uri': 'http://www.eionet.europa.eu/gemet/concept/',
-                'language': 'en'
+            
+            # Try different search modes and languages for better coverage
+            search_modes = [3, 2, 4]  # Contains, Prefix, Auto search
+            
+            # Try a few search strategies to maximize results
+            search_strategies = [
+                # Strategy 1: Original query in English with contains search
+                {'keyword': query.lower(), 'language': 'en', 'search_mode': 3},
+                # Strategy 2: Original query in German with contains search
+                {'keyword': query.lower(), 'language': 'de', 'search_mode': 3},
+                # Strategy 3: Try auto search mode with original query
+                {'keyword': query.lower(), 'language': 'en', 'search_mode': 4},
+                # Strategy 4: Try auto search mode with original query in German
+                {'keyword': query.lower(), 'language': 'de', 'search_mode': 4},
+            ]
+            
+            # Check if query is geographical in nature
+            geo_terms = {
+                # Mountains and alpine terms
+                'alp': ['mountain', 'berg', 'gebirge', 'alps', 'alpine'],
+                'berg': ['mountain', 'hill', 'gebirge', 'massif'],
+                'gebirge': ['mountain range', 'mountains', 'mountain', 'alps'],
+                'mountain': ['berg', 'gebirge', 'massif', 'alps'],
+                # Water bodies
+                'fluss': ['river', 'stream', 'waterway', 'watercourse'],
+                'river': ['fluss', 'stream', 'waterway', 'watercourse'],
+                'see': ['lake', 'water body', 'reservoir'],
+                'lake': ['see', 'water body', 'reservoir'],
+                # Regions and places
+                'aargau': ['canton', 'region', 'switzerland', 'schweiz'],
+                'region': ['area', 'zone', 'territory', 'gebiet'],
+                'wald': ['forest', 'woodland', 'woods'],
+                'forest': ['wald', 'woodland', 'woods'],
             }
             
-            search_response = requests.get(search_url, params=search_params, timeout=10, verify=self.verify_ssl)
+            # Add related geo terms to search strategies if applicable
+            query_lower = query.lower()
+            for term, replacements in geo_terms.items():
+                if term in query_lower:
+                    for replacement in replacements:
+                        for lang in ['en', 'de']:
+                            search_strategies.append({
+                                'keyword': replacement.lower(),
+                                'language': lang,
+                                'search_mode': 3
+                            })
             
-            if search_response.status_code == 200:
-                # Try to parse the response - GEMET might return XML or JSON
-                content_type = search_response.headers.get('content-type', '').lower()
-                
-                if 'json' in content_type:
-                    # Handle JSON response
-                    concepts = search_response.json()
-                    if isinstance(concepts, list):
-                        for concept in concepts[:5]:  # Limit to 5 concepts
-                            concept_uri = concept.get('uri', '')
-                            if concept_uri:
-                                multilingual_terms = self._get_gemet_multilingual_labels(concept_uri)
-                                if multilingual_terms:
-                                    results.append({
-                                        'source': 'GEMET',
-                                        'multilingual_label': multilingual_terms,
-                                        'uri': concept_uri,
-                                        'description': f'Environmental concept from GEMET thesaurus'
-                                    })
-                else:
-                    # For now, create a fallback multilingual entry
-                    # This would need to be improved with actual GEMET API parsing
-                    multilingual_terms = {}
-                    for lang_code in ['de', 'fr', 'it', 'en']:
-                        multilingual_terms[lang_code] = f"GEMET concept for '{query}' ({gemet_languages[lang_code]})"
-                    
-                    results.append({
-                        'source': 'GEMET',
-                        'multilingual_label': multilingual_terms,
-                        'uri': f'http://www.eionet.europa.eu/gemet/concept/{hash(query) % 10000}',
-                        'description': f'Environmental concept related to {query}'
-                    })
-                    
-        except Exception as e:
-            print(f"Error searching GEMET: {e}")
-        
-        return results
-    
-    def _get_gemet_multilingual_labels(self, concept_uri):
-        """Get multilingual labels for a GEMET concept"""
-        multilingual_terms = {}
-        
-        for lang_code in ['de', 'fr', 'it', 'en']:
-            try:
-                # GEMET API to get preferred label in specific language
-                label_url = "https://www.eionet.europa.eu/gemet/getConcept"
-                label_params = {
-                    'concept_uri': concept_uri,
-                    'language': lang_code
+            # Special handling for certain geographical terms 
+            if any(region in query_lower for region in ['aargau', 'zürich', 'bern', 'geneva']):
+                # For Swiss cantons/regions, add search for geographical/administrative terms
+                for term in ['administrative region', 'geographical region', 'canton', 'administrative unit']:
+                    for lang in ['en', 'de']:
+                        search_strategies.append({
+                            'keyword': term.lower(),
+                            'language': lang,
+                            'search_mode': 3
+                        })
+            
+            # Try all search strategies and collect found concepts
+            for strategy in search_strategies:
+                search_params = {
+                    'keyword': strategy['keyword'],
+                    'search_mode': strategy['search_mode'],
+                    'thesaurus_uri': 'http://www.eionet.europa.eu/gemet/concept/',
+                    'language': strategy['language']
                 }
                 
-                label_response = requests.get(label_url, params=label_params, timeout=5, verify=self.verify_ssl)
-                if label_response.status_code == 200:
-                    # Parse the response to extract the label
-                    # This would need to be adapted based on actual GEMET API response format
-                    label_data = label_response.text
-                    # For now, use a simplified approach
-                    if label_data and len(label_data.strip()) > 0:
-                        # Extract label from response (would need proper parsing)
-                        multilingual_terms[lang_code] = f"GEMET term ({lang_code.upper()})"
+                logging.info(f"GEMET Search Strategy: {strategy}")
+                try:
+                    search_response = self.session.get(search_url, params=search_params, timeout=10, verify=self.verify_ssl)
+                    logging.info(f"GEMET Search Response status: {search_response.status_code}")
+                    
+                    if search_response.status_code == 200:
+                        search_concepts = search_response.json()
+                        if search_concepts and len(search_concepts) > 0:
+                            logging.info(f"GEMET found {len(search_concepts)} concepts with strategy: {strategy}")
+                            # Add concepts to our collection
+                            found_concepts.extend(search_concepts)
+                            
+                            # Mark this as a fallback result if we're using a related term
+                            if strategy['keyword'] != query.lower():
+                                logging.info(f"Used fallback term '{strategy['keyword']}' for original query '{query}'")
+                except Exception as e:
+                    logging.error(f"Error in GEMET search strategy: {e}")
+            
+            # If we have found concepts, process them
+            if found_concepts:
+                # Deduplicate concepts by URI
+                unique_uris = set()
+                unique_concepts = []
+                
+                for concept in found_concepts:
+                    concept_uri = concept.get('uri', '')
+                    if concept_uri and concept_uri not in unique_uris:
+                        unique_uris.add(concept_uri)
+                        unique_concepts.append(concept)
+                
+                # Process up to 5 unique concepts
+                for concept in unique_concepts[:5]:
+                    concept_uri = concept.get('uri', '')
+                    
+                    # Skip concepts without a proper URI
+                    if not concept_uri:
+                        logging.info(f"Skipping GEMET concept with missing URI")
+                        continue
+                    
+                    # Get concept ID from URI (e.g., "5401" from "http://www.eionet.europa.eu/gemet/concept/5401")
+                    concept_id = concept_uri.split('/')[-1]
+                    logging.info(f"Processing GEMET concept ID: {concept_id}")
+                    
+                    # Get multilingual labels for this concept
+                    multilingual_terms = self._get_gemet_multilingual_labels(concept_uri)
+                    
+                    # If we have multilingual terms, add this as a result
+                    if multilingual_terms:
+                        logging.info(f"Got multilingual terms for concept {concept_id}: {multilingual_terms}")
+                        # Get definition for better description (English preferred, fallback to German)
+                        definition = ""
+                        if 'definition' in concept and 'string' in concept['definition']:
+                            definition = concept['definition']['string']
+                        elif not definition:
+                            definition = self._get_gemet_definition(concept_uri)
                         
-            except Exception as e:
-                print(f"Error getting GEMET label for {lang_code}: {e}")
+                        # If no definition, create a standard description
+                        if not definition:
+                            definition = f"Environmental term from GEMET thesaurus"
+                        else:
+                            # Truncate long definitions
+                            if len(definition) > 100:
+                                definition = definition[:97] + "..."
+                        
+                        # Create standardized concept URI format as specified
+                        standard_uri = f"http://www.eionet.europa.eu/gemet/concept/{concept_id}"
+                        
+                        # Check if this term is likely to be relevant to the original query
+                        is_relevant = True
+                        
+                        # For certain geographical queries where we had to use fallback terms,
+                        # add a relevance note in the description
+                        original_query_lower = query.lower()
+                        if ('alp' in original_query_lower and not any(alp_term in str(multilingual_terms).lower() 
+                                                                for alp_term in ['alp', 'mountain', 'berg'])) or \
+                           ('fluss' in original_query_lower and not any(river_term in str(multilingual_terms).lower() 
+                                                                 for river_term in ['fluss', 'river', 'stream'])) or \
+                           ('aargau' in original_query_lower and not 'aargau' in str(multilingual_terms).lower()):
+                            definition = f"Environmental term related to '{original_query_lower}': {definition}"
+                        
+                        results.append({
+                            'source': 'GEMET',
+                            'multilingual_label': multilingual_terms,
+                            'uri': standard_uri,
+                            'description': definition,
+                            'entry_id': concept_id,  # Store concept ID for consistency with other sources
+                            'is_synonym_result': original_query_lower not in str(multilingual_terms).lower(),
+                            'found_via_query': original_query_lower
+                        })
+                        logging.info(f"Added GEMET result: {concept_id}")
+                    else:
+                        logging.info(f"No multilingual terms found for concept {concept_id}")
+            
+            # If we still have no results for specific geographical terms, try one more approach
+            # by looking for more general environmental concepts
+            if not results and any(geo_term in query.lower() for geo_term in ['alp', 'fluss', 'aargau']):
+                logging.info(f"No GEMET results found for '{query}'. Trying general environmental concepts as fallback.")
+                
+                # Mapping of problem terms to known working GEMET concepts
+                term_mapping = {
+                    'alp': ['mountain', 'berg', 'alpine', 'gebirge'],
+                    'fluss': ['river', 'watercourse', 'gewässer', 'water body'],
+                    'aargau': ['administrative region', 'geographical region', 'canton', 'region']
+                }
+                
+                # Find matching terms for our query
+                matching_terms = []
+                for term, alternatives in term_mapping.items():
+                    if term in query.lower():
+                        matching_terms.extend(alternatives)
+                
+                if not matching_terms:
+                    # Default general environmental concepts as last resort
+                    matching_terms = ['environmental protection', 'nature conservation', 'ecosystem']
+                
+                for term in matching_terms[:3]:  # Try up to 3 related terms
+                    if len(results) >= 3:  # Limit to 3 fallback results
+                        break
+                        
+                    for lang in ['en', 'de']:
+                        try:
+                            search_params = {
+                                'keyword': term.lower(),
+                                'search_mode': 3,  # Contains search for better matches
+                                'thesaurus_uri': 'http://www.eionet.europa.eu/gemet/concept/',
+                                'language': lang
+                            }
+                            
+                            fallback_response = self.session.get(search_url, params=search_params, timeout=10, verify=self.verify_ssl)
+                            if fallback_response.status_code == 200:
+                                fallback_concepts = fallback_response.json()
+                                if fallback_concepts:
+                                    for concept in fallback_concepts[:1]:  # Take only the first match
+                                        concept_uri = concept.get('uri', '')
+                                        if not concept_uri:
+                                            continue
+                                            
+                                        concept_id = concept_uri.split('/')[-1]
+                                        multilingual_terms = self._get_gemet_multilingual_labels(concept_uri)
+                                        
+                                        if multilingual_terms:
+                                            standard_uri = f"http://www.eionet.europa.eu/gemet/concept/{concept_id}"
+                                            
+                                            # Get definition for context
+                                            definition = ""
+                                            if 'definition' in concept and 'string' in concept['definition']:
+                                                definition = concept['definition']['string']
+                                            else:
+                                                definition = self._get_gemet_definition(concept_uri)
+                                                
+                                            # Add fallback note
+                                            description = f"Environmental term related to '{query}': "
+                                            if definition:
+                                                description += definition[:80] + "..." if len(definition) > 80 else definition
+                                            else:
+                                                description = f"Environmental term related to '{query}' from GEMET thesaurus"
+                                            
+                                            results.append({
+                                                'source': 'GEMET',
+                                                'multilingual_label': multilingual_terms,
+                                                'uri': standard_uri,
+                                                'description': description,
+                                                'entry_id': concept_id,
+                                                'is_synonym_result': True,
+                                                'found_via_query': term
+                                            })
+                                            break
+                        except Exception as e:
+                            logging.error(f"Error in specific fallback search: {e}")
+            
+        except Exception as e:
+            logging.error(f"Error searching GEMET: {e}", exc_info=True)
+        
+        # Cache results to avoid repeated API calls for the same query
+        try:
+            cache.set(cache_key, results, timeout=3600)  # 1 hour cache
+            logging.info(f"Cached {len(results)} GEMET results for '{query}'")
+        except Exception as e:
+            logging.debug(f"GEMET cache write failed for '{query}': {e}")
+        
+        logging.info(f"GEMET search returned {len(results)} results")
+        return results
+    
+    def _get_gemet_definition(self, concept_uri):
+        """Get definition for a GEMET concept in English or German"""
+        for language in ['en', 'de']:
+            try:
+                # Get concept details including definition
+                url = "https://www.eionet.europa.eu/gemet/getConcept"
+                params = {
+                    'concept_uri': concept_uri,
+                    'language': language
+                }
+                
+                response = self.session.get(url, params=params, timeout=5, verify=self.verify_ssl)
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'definition' in data and 'string' in data['definition']:
+                        return data['definition']['string']
+            except Exception:
+                pass
+        return ""
+    
+    def _get_gemet_multilingual_labels(self, concept_uri):
+        """Get multilingual labels for a GEMET concept using the official API
+        Returns a dictionary mapping language codes to preferred labels
+        """
+        multilingual_terms = {}
+        
+        # Check cache first
+        cache_key = f"gemet_labels:{concept_uri.split('/')[-1]}"
+        try:
+            cached = cache.get(cache_key)
+            if cached:
+                logging.info(f"Using cached GEMET labels for {concept_uri}")
+                return cached
+        except Exception:
+            pass
+        
+        try:
+            logging.info(f"Getting multilingual labels for GEMET concept: {concept_uri}")
+            # Get all translations for this concept's preferred label
+            url = "https://www.eionet.europa.eu/gemet/getAllTranslationsForConcept"
+            params = {
+                'concept_uri': concept_uri,
+                'property_uri': 'http://www.w3.org/2004/02/skos/core#prefLabel'
+            }
+            
+            response = self.session.get(url, params=params, timeout=8, verify=self.verify_ssl)
+            logging.info(f"GEMET translations response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                translations = response.json()
+                if isinstance(translations, list):
+                    logging.info(f"Found {len(translations)} translations for concept")
+                    # GEMET supports many languages - extract only the ones we need
+                    for translation in translations:
+                        lang_code = translation.get('language', '')
+                        # Map GEMET language codes to our standardized ones
+                        if lang_code in ['de', 'fr', 'it', 'en']:
+                            label = translation.get('string', '')
+                            if label:
+                                multilingual_terms[lang_code] = label
+                                logging.info(f"Found {lang_code} label: {label}")
+            
+            # Only cache if we found at least some translations
+            if multilingual_terms:
+                try:
+                    cache.set(cache_key, multilingual_terms, timeout=24*3600)  # 24 hour cache
+                    logging.info(f"Cached {len(multilingual_terms)} translations for concept")
+                except Exception as e:
+                    logging.debug(f"Error caching GEMET labels: {e}")
+            else:
+                logging.info("No translations found for concept")
+                
+        except Exception as e:
+            logging.error(f"Error getting GEMET multilingual labels for {concept_uri}: {e}", exc_info=True)
         
         return multilingual_terms if multilingual_terms else None
     
@@ -873,6 +1133,7 @@ class KeywordGenerator:
         
         # Limit final results to 10
         return all_keywords[:10]
+
 keyword_generator = KeywordGenerator()
 
 @app.route('/')
