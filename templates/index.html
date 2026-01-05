@@ -3,193 +3,57 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DCAT-AP CH Keyword Generator</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <title>I14Y Keyword Generator</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
     <style>
-        .info-icon {
-            display: inline-block;
-            margin-left: 8px;
-            width: 18px;
-            height: 18px;
-            background-color: #007acc;
-            color: white;
-            border-radius: 50%;
-            text-align: center;
-            line-height: 18px;
-            font-size: 12px;
-            cursor: pointer;
-            vertical-align: middle;
-        }
-        
-        .info-icon:hover {
-            background-color: #005999;
-        }
-        
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5);
-            align-items: center; /* center content vertically */
-            justify-content: center; /* center content horizontally */
-            overflow: auto; /* allow scrolling for tall content */
-        }
-        
-        .modal-content {
-            background-color: #fefefe;
-            margin: 0 20px;
-            padding: 20px;
-            border-radius: 8px;
-            width: 80%;
-            max-width: 600px;
-            max-height: 90vh;
-            overflow-y: auto;
-            position: relative;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-        }
-        
-        .modal-close {
-            color: #aaa;
-            float: right;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-            line-height: 1;
-        }
-        
-        .modal-close:hover {
-            color: #000;
-        }
-        
-        .modal h3 {
-            margin-top: 0;
-            color: #333;
-        }
-        
-        .modal ol {
-            padding-left: 20px;
-        }
-        
-        .modal li {
-            margin-bottom: 10px;
-        }
-        
-        .modal a {
-            color: #007acc;
-            text-decoration: none;
-        }
-        
-        .modal a:hover {
-            text-decoration: underline;
-        }
-
-        .lang-tag {
-            display: inline-block;
-            background-color: #e0e0e0;
-            color: #333;
-            border-radius: 4px;
-            padding: 2px 5px;
-            margin-right: 5px;
-            font-size: 10px;
-            font-weight: bold;
-        }
-        
-        .lang-tag.current {
-            background-color: #007acc;
-            color: white;
-        }
-        
-        .language-indicators {
-            margin-bottom: 8px;
-        }
-        
-        .synonym-result {
-            border-left: 3px solid #28a745 !important;
-        }
-        
-        .synonym-indicator {
-            margin-bottom: 8px;
-        }
-
-        /* Status message area shown during search phases */
-        .status {
-            margin: 15px 0;
-            padding: 12px 16px;
-            font-size: 14px;
-            color: #2c3e50;
-            background: linear-gradient(135deg, #e8f4fd 0%, #f0f9ff 100%);
-            border: 1px solid #bee3f8;
-            border-radius: 8px;
-            border-left: 4px solid #3182ce;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            animation: statusSlideIn 0.3s ease-out;
-        }
-        
-        .status::before {
-            content: "🔍";
-            margin-right: 8px;
-            font-size: 16px;
-        }
-        
-        .status.synonyms::before {
-            content: "🔗";
-        }
-        
-        .status.termdat::before {
-            content: "📚";
-        }
-        
-        .status.wikidata::before {
-            content: "🌐";
-        }
-        
-        .status.gemet::before {
-            content: "🌿";
-        }
-        
-        .status.rendering::before {
-            content: "✨";
-        }
-        
-        @keyframes statusSlideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .status small {
-            display: block;
-            color: #666;
-            margin-top: 4px;
-            font-size: 12px;
-        }
+        /* Component-specific styles moved to styles.css */
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>I14Y Keyword Generator</h1>
-            <p>Generate compliant keywords following DCAT-AP CH specifications using TERMDAT, GEMET, and Wikidata 
-                <span class="info-icon" onclick="openModal()" title="Show keyword priority cascade">i</span>
-            </p>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                    <h1 class="header-title">I14Y Tools</h1>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
+        <div class="container">
+            <a href="{{ url_for('welcome') }}" style="display: inline-flex; align-items: center; color: #3182ce; text-decoration: none; margin-bottom: 15px; font-size: 0.95em;">
+                ← Back to Workflow Selection
+            </a>
+            <div class="page-header">
+                <h1>Keyword Generator</h1>
+                <p class="page-lead">Generate compliant keywords following DCAT-AP CH specifications using TERMDAT, GEMET, and Wikidata 
+                    <span class="info-icon" onclick="openModal()" title="Show keyword priority cascade">i</span>
+                </p>
+            </div>
+
+        <!-- I14Y Dataset Search Section -->
+        <div class="search-section" style="background: #f5f5f5; border-top: 3px solid #3182ce;">
+            <h3 style="margin: 0 0 15px 0; color: #2c3e50;">📚 Search I14Y Datasets</h3>
+            <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">Find a dataset in I14Y and use its description to generate keywords:</p>
+            <div style="display: flex; gap: 8px;">
+                <input type="text" id="i14ySearchInput" class="search-input" placeholder="Search for datasets (e.g., 'Seilbahn', 'Energie', 'Verkehr')..." 
+                       style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin: 0;" />
+                <button id="i14ySearchBtn" class="search-btn" style="margin: 0; white-space: nowrap;">Search I14Y</button>
+            </div>
+            <div id="i14yResultsContainer" style="display: none; margin-top: 15px; max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; background: white;"></div>
+            <div id="i14ySearchStatus" style="margin-top: 10px; font-size: 12px; color: #666;"></div>
         </div>
 
         <div class="search-section">
             <div class="search-container">
-                <input type="text" id="searchInput" class="search-input" 
-                       placeholder="Enter a term to generate keywords..." />
+                <textarea id="searchInput" class="search-input" rows="3"
+                       placeholder="Enter a keyword or paste a longer description (multiple sentences will be analyzed to extract relevant keywords)..." 
+                       style="resize: vertical; min-height: 60px;"></textarea>
                 <div class="search-options" style="margin: 10px 0;">
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
                         <input type="checkbox" id="includeSynonyms" checked>
@@ -203,6 +67,13 @@
                     <button id="connectI14YBtn" class="search-btn secondary" disabled>Upload to I14Y</button>
                 </div>
             </div>
+        </div>
+        
+        <!-- Extracted keywords info section -->
+        <div id="extractedKeywordsSection" class="search-section" style="display: none; background: #e8f4fd; border-left: 4px solid #3182ce;">
+            <h3 style="margin: 0 0 10px 0; color: #2c3e50;">📋 Extracted Keywords</h3>
+            <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">The following keywords were extracted from your description and searched in the vocabularies:</p>
+            <div id="extractedKeywordsList" style="display: flex; gap: 8px; flex-wrap: wrap;"></div>
         </div>
 
         <div class="results-section" id="resultsSection" style="display: none;">
@@ -229,6 +100,25 @@
             <h3>Search History</h3>
             <ul id="searchHistoryList" style="list-style-type: none; padding: 0;"></ul>
         </div>
+        </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
 
         <!-- Modal for DCAT-AP CH Information -->
         <div id="dcatModal" class="modal">
@@ -304,6 +194,116 @@
 
         const selectedKeywords = new Set();
         const searchHistory = [];
+
+        // I14Y Dataset Search Functionality
+        const i14ySearchInput = document.getElementById('i14ySearchInput');
+        const i14ySearchBtn = document.getElementById('i14ySearchBtn');
+        const i14yResultsContainer = document.getElementById('i14yResultsContainer');
+        const i14ySearchStatus = document.getElementById('i14ySearchStatus');
+
+        i14ySearchBtn.addEventListener('click', searchI14YDatasets);
+        i14ySearchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                searchI14YDatasets();
+            }
+        });
+
+        async function searchI14YDatasets() {
+            const query = i14ySearchInput.value.trim();
+            if (!query) {
+                i14ySearchStatus.textContent = 'Please enter a search term';
+                return;
+            }
+
+            i14ySearchStatus.textContent = '🔍 Searching I14Y datasets...';
+            i14yResultsContainer.style.display = 'none';
+
+            try {
+                const response = await fetch('/search-i14y-datasets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Search failed');
+                }
+
+                if (!data.datasets || data.datasets.length === 0) {
+                    i14ySearchStatus.textContent = `No datasets found for "${query}"`;
+                    i14yResultsContainer.style.display = 'none';
+                    return;
+                }
+
+                // Display results
+                i14yResultsContainer.innerHTML = data.datasets.map((dataset, index) => {
+                    // Extract German or first available language for display
+                    const getLocalizedField = (field) => {
+                        if (typeof field === 'string') return field;
+                        if (typeof field === 'object' && field !== null) {
+                            return field.de || field.en || field.fr || field.it || 'N/A';
+                        }
+                        return 'N/A';
+                    };
+                    
+                    const title = getLocalizedField(dataset.title);
+                    const description = getLocalizedField(dataset.description);
+                    const publisher = dataset.publisher || 'I14Y';
+                    const modified = dataset.modified || new Date().toLocaleDateString('de-CH');
+                    const guid = dataset.guid || '';
+                    
+                    return `
+                    <div style="padding: 12px; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s;" 
+                         class="i14y-dataset-result"
+                         data-guid="${guid}"
+                         data-title="${title.replace(/"/g, '&quot;')}"
+                         data-description="${description.replace(/"/g, '&quot;')}"
+                         onmouseover="this.style.background = '#f9f9f9'" 
+                         onmouseout="this.style.background = 'white'">
+                        <div style="font-weight: 600; color: #2c3e50; margin-bottom: 4px;">${title}</div>
+                        <div style="font-size: 13px; color: #666; line-height: 1.4; max-height: 50px; overflow: hidden; text-overflow: ellipsis;">${description}</div>
+                        <div style="font-size: 11px; color: #999; margin-top: 4px;">${publisher} • Modified: ${modified}</div>
+                    </div>
+                    `;
+                }).join('');
+                
+                i14yResultsContainer.style.display = 'block';
+                i14ySearchStatus.textContent = `Found ${data.datasets.length} datasets`;
+                
+                // Attach click handlers to all dataset results
+                document.querySelectorAll('.i14y-dataset-result').forEach(element => {
+                    element.addEventListener('click', function() {
+                        const guid = this.getAttribute('data-guid');
+                        const title = this.getAttribute('data-title');
+                        const description = this.getAttribute('data-description');
+                        selectI14YDataset(description, title, guid);
+                    });
+                });
+
+            } catch (error) {
+                console.error('I14Y search error:', error);
+                i14ySearchStatus.textContent = `Error: ${error.message}`;
+                i14yResultsContainer.style.display = 'none';
+            }
+        }
+
+        function selectI14YDataset(description, title, guid) {
+            // Insert the description into the main search field
+            searchInput.value = description;
+            i14yResultsContainer.style.display = 'none';
+            i14ySearchStatus.textContent = `✓ Loaded: "${title}"`;
+            
+            // Store the GUID globally for later use in upload
+            window.selectedI14YGuid = guid;
+            
+            // Scroll to main search section
+            document.querySelector('.search-section:not(:first-of-type)').scrollIntoView({ behavior: 'smooth' });
+            
+            // Focus on the search input
+            searchInput.focus();
+        }
 
         // Attach click handler for synonym info button (robust fallback)
         const synonymInfoBtn = document.getElementById('synonymInfoBtn');
@@ -461,6 +461,19 @@
                 return;
             }
 
+            // Display extracted keywords if present
+            const extractedSection = document.getElementById('extractedKeywordsSection');
+            const extractedList = document.getElementById('extractedKeywordsList');
+            
+            if (data.extracted_keywords && data.extracted_keywords.length > 1) {
+                extractedList.innerHTML = data.extracted_keywords
+                    .map(kw => `<span style="background: #3182ce; color: white; padding: 6px 12px; border-radius: 16px; font-size: 14px; font-weight: 500;">${kw}</span>`)
+                    .join('');
+                extractedSection.style.display = 'block';
+            } else {
+                extractedSection.style.display = 'none';
+            }
+
             // Update results count to include synonym information
             let countText = `${data.total || 0} keywords found`;
             if (data.synonym_count && data.synonym_count > 0) {
@@ -519,10 +532,21 @@
                             </div>`;
                         }
                         
+                        // Add extracted keyword indicator if this result was found via text extraction
+                        let extractedIndicator = '';
+                        if (keyword.search_keyword && data.extracted_keywords && data.extracted_keywords.length > 1) {
+                            extractedIndicator = `<div class="extracted-indicator" title="Extracted from your description">
+                                <span style="background: #3182ce; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
+                                    🔍 "${keyword.search_keyword}"
+                                </span>
+                            </div>`;
+                        }
+                        
                         return `
                             <div class="keyword-card ${keyword.is_synonym_result ? 'synonym-result' : ''}" id="keyword-${index}" onclick="toggleKeywordSelection('keyword-${index}', window.keywordsData[${index}])">
                                 <div class="keyword-source ${keyword.source.toLowerCase()}">${keyword.source}</div>
                                 <div class="keyword-label">${displayLabel}</div>
+                                ${extractedIndicator}
                                 ${synonymIndicator}
                                 ${languageIndicators}
                                 ${keyword.description ? `<div class="keyword-description">${keyword.description}</div>` : ''}
@@ -574,12 +598,9 @@
             error.style.display = 'none';
         }
  
+        // Search history is intentionally disabled
         function updateSearchHistory(query) {
-            searchHistory.push(query);
-            const historyItem = document.createElement('li');
-            historyItem.textContent = query;
-            searchHistoryList.appendChild(historyItem);
-            searchHistorySection.style.display = 'block';
+            return;
         }
  
         // Initialize button states - both JSON and Upload buttons disabled until search
@@ -617,9 +638,17 @@
             localStorage.setItem('selectedKeywords', JSON.stringify(keywordsArray));
             localStorage.setItem('i14yKeywords', JSON.stringify(i14yKeywordsArray));
             
+            // Store the GUID if one was selected from I14Y
+            if (window.selectedI14YGuid) {
+                localStorage.setItem('selectedI14YGuid', window.selectedI14YGuid);
+            }
+            
             // Debug: Log what was saved
             console.log('Saved keywords to localStorage:', keywordsArray);
             console.log('Saved I14Y keywords to localStorage:', i14yKeywordsArray);
+            if (window.selectedI14YGuid) {
+                console.log('Saved I14Y GUID to localStorage:', window.selectedI14YGuid);
+            }
             
             // Redirect directly to upload page
             window.location.href = '/upload';

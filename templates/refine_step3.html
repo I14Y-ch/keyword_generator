@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Generated Keywords - Refine Keywords</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                    <h1 class="header-title">I14Y Tools</h1>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
+        <div class="container">
+            <a href="{{ url_for('refine_step2') }}" class="back-link">Back to Item Details</a>
+            
+            <div class="page-header">
+                <h1>Review Generated Keywords</h1>
+                <p class="page-lead">Select keywords to update on I14Y</p>
+            </div>
+            
+            <div class="step-indicator-bar">
+                <div class="step-progress" style="width: 75%;"></div>
+                <span class="step-text">Step 3 of 4: Generate New</span>
+            </div>
+            
+            <div class="workflow-section">
+                <h2 class="section-title">✨ Keyword Comparison</h2>
+                
+                <div class="keyword-comparison">
+                    <div class="keyword-column current">
+                        <h4>Current Keywords</h4>
+                        <div id="comparisonCurrent"></div>
+                    </div>
+                    <div class="keyword-column proposed">
+                        <h4>Proposed Keywords</h4>
+                        <div class="selection-info">
+                            💡 Click on keywords to select/deselect them. <span id="selectionCount" style="font-weight: 600;">0 selected</span>
+                        </div>
+                        <div id="comparisonProposed"></div>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 30px; display: flex; gap: 15px;">
+                    <button id="showJsonBtn" class="search-btn secondary">View JSON</button>
+                    <button id="proceedToUpdateBtn" class="search-btn" disabled>
+                        Proceed to Update (<span id="updateCount">0</span> selected) →
+                    </button>
+                </div>
+            </div>
+            
+            <div id="error" class="error" style="display: none;"></div>
+        </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        let selectedItem = null;
+        let generatedKeywords = [];
+        let selectedKeywords = new Set();
+        
+        window.addEventListener('DOMContentLoaded', function() {
+            const storedItem = sessionStorage.getItem('selectedI14YItem');
+            const storedKeywords = sessionStorage.getItem('generatedKeywords');
+            
+            if (!storedItem || !storedKeywords) {
+                window.location.href = '/refine/step1';
+                return;
+            }
+            
+            selectedItem = JSON.parse(storedItem);
+            generatedKeywords = JSON.parse(storedKeywords);
+            
+            displayComparison();
+        });
+        
+        function displayComparison() {
+            // Display current keywords
+            const currentContainer = document.getElementById('comparisonCurrent');
+            let currentKeywords = [];
+            
+            // Try different possible keyword field names from I14Y API
+            if (selectedItem.fullObject) {
+                currentKeywords = selectedItem.fullObject.keywords || 
+                                 selectedItem.fullObject.keyword || 
+                                 selectedItem.fullObject.theme || 
+                                 [];
+            } else if (selectedItem.keywords) {
+                currentKeywords = selectedItem.keywords;
+            } else if (selectedItem.keyword) {
+                currentKeywords = selectedItem.keyword;
+            } else if (selectedItem.theme) {
+                currentKeywords = selectedItem.theme;
+            }
+            
+            // Ensure currentKeywords is an array
+            if (!Array.isArray(currentKeywords)) {
+                currentKeywords = [];
+            }
+            
+            if (currentKeywords.length === 0) {
+                currentContainer.innerHTML = '<p style="color: #666; font-style: italic;">No current keywords</p>';
+            } else {
+                currentContainer.innerHTML = currentKeywords.map(kw => {
+                    let label = extractLabel(kw);
+                    let uri = kw.uri || '';
+                    
+                    return `
+                        <div class="keyword-display-card" style="margin-bottom: 10px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+                            <div style="font-weight: 600; color: #2c3e50; margin-bottom: 5px;">${escapeHtml(label)}</div>
+                            ${uri ? `<div style="font-size: 0.85em; color: #666; font-family: monospace; word-break: break-all;">${escapeHtml(uri)}</div>` : ''}
+                        </div>
+                    `;
+                }).join('');
+            }
+            
+            // Display proposed keywords
+            displayProposedKeywords();
+        }
+        
+        function displayProposedKeywords() {
+            const proposedContainer = document.getElementById('comparisonProposed');
+            
+            if (generatedKeywords.length === 0) {
+                proposedContainer.innerHTML = '<p style="color: #666; font-style: italic;">No keywords generated</p>';
+                return;
+            }
+            
+            proposedContainer.innerHTML = generatedKeywords.map((kw, index) => {
+                const isSelected = selectedKeywords.has(index);
+                
+                return `
+                    <div class="proposed-keyword-card ${isSelected ? 'selected' : ''}" 
+                         onclick="toggleKeyword(${index})"
+                         style="margin-bottom: 10px; padding: 12px; background: white; border-radius: 6px; cursor: pointer; border: 2px solid ${isSelected ? '#059669' : 'transparent'}; transition: all 0.2s ease;">
+                        <div style="font-weight: 600; color: #2c3e50; margin-bottom: 5px;">${escapeHtml(kw.label_de || kw.label || 'Unknown')}</div>
+                        ${kw.uri ? `<div style="font-size: 0.85em; color: #666; font-family: monospace; word-break: break-all;">${escapeHtml(kw.uri)}</div>` : ''}
+                        <div style="font-size: 0.8em; color: #999; margin-top: 5px;">
+                            Source: ${escapeHtml(kw.source || 'Unknown')}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            updateSelectionCount();
+        }
+        
+        function toggleKeyword(index) {
+            if (selectedKeywords.has(index)) {
+                selectedKeywords.delete(index);
+            } else {
+                selectedKeywords.add(index);
+            }
+            displayProposedKeywords();
+        }
+        
+        function updateSelectionCount() {
+            const count = selectedKeywords.size;
+            document.getElementById('selectionCount').textContent = count + ' selected';
+            document.getElementById('updateCount').textContent = count;
+            document.getElementById('proceedToUpdateBtn').disabled = count === 0;
+        }
+        
+        function extractLabel(kw) {
+            if (kw.label && typeof kw.label === 'object') {
+                if (kw.label.multilingual_label) {
+                    return kw.label.multilingual_label.de || 
+                           kw.label.multilingual_label.fr || 
+                           kw.label.multilingual_label.en || 
+                           kw.label.multilingual_label.it || 
+                           Object.values(kw.label.multilingual_label)[0] || 
+                           'Unknown';
+                } else {
+                    return kw.label.de || kw.label.fr || kw.label.en || kw.label.it || 'Unknown';
+                }
+            } else if (typeof kw.label === 'string') {
+                return kw.label;
+            }
+            return 'Unknown';
+        }
+        
+        document.getElementById('showJsonBtn').addEventListener('click', function() {
+            const selected = Array.from(selectedKeywords).map(index => generatedKeywords[index]);
+            
+            // Format keywords as they will be sent to API
+            const formattedKeywords = selected.map(kw => ({
+                label: {
+                    de: kw.label_de || '',
+                    en: kw.label_en || '',
+                    fr: kw.label_fr || '',
+                    it: kw.label_it || '',
+                    rm: kw.label_rm || ''
+                },
+                uri: kw.uri || ''
+            }));
+            
+            alert('Formatted Keywords (as will be sent to I14Y):\n\n' + JSON.stringify(formattedKeywords, null, 2));
+        });
+        
+        document.getElementById('proceedToUpdateBtn').addEventListener('click', function() {
+            // Store selected keywords
+            const selected = Array.from(selectedKeywords).map(index => generatedKeywords[index]);
+            sessionStorage.setItem('selectedKeywords', JSON.stringify(selected));
+            // Navigate to step 4
+            window.location.href = '/refine/step4';
+        });
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

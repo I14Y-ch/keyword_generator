@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Current Item Details - Refine Keywords</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                    <h1 class="header-title">I14Y Tools</h1>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
+        <div class="container">
+            <a href="{{ url_for('refine_step1') }}" class="back-link">Back to Search</a>
+            
+            <div class="page-header">
+                <h1>Current Item Details</h1>
+                <p class="page-lead">Review current information and keywords</p>
+            </div>
+            
+            <div class="step-indicator-bar">
+                <div class="step-progress" style="width: 50%;"></div>
+                <span class="step-text">Step 2 of 4: Review Current</span>
+            </div>
+            
+            <div class="workflow-section">
+                <h2 class="section-title">📋 Item Information</h2>
+                
+                <div id="selectedItemDetails"></div>
+                
+                <div id="currentKeywordsSection" style="margin-top: 30px;">
+                    <h3 style="color: #2c3e50; margin-bottom: 15px;">Current Keywords:</h3>
+                    <div id="currentKeywordsList"></div>
+                </div>
+                
+                <div style="margin-top: 30px; display: flex; gap: 15px;">
+                    <button id="generateNewBtn" class="search-btn" style="padding: 12px 30px;">
+                        Generate Improved Keywords →
+                    </button>
+                </div>
+            </div>
+            
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Loading item details...</p>
+            </div>
+            
+            <div id="error" class="error" style="display: none;"></div>
+        </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        let selectedItem = null;
+        
+        // Load selected item from sessionStorage
+        window.addEventListener('DOMContentLoaded', function() {
+            const storedItem = sessionStorage.getItem('selectedI14YItem');
+            if (!storedItem) {
+                window.location.href = '/refine/step1';
+                return;
+            }
+            
+            selectedItem = JSON.parse(storedItem);
+            displayItemDetails();
+        });
+        
+        function displayItemDetails() {
+            const detailsContainer = document.getElementById('selectedItemDetails');
+            
+            const title = selectedItem.title || 'Untitled';
+            const description = selectedItem.description || 'No description available';
+            const objectType = selectedItem.objectType || 'dataset';
+            const id = selectedItem.id || selectedItem.guid || 'Unknown';
+            
+            detailsContainer.innerHTML = `
+                <div style="background: #f8fafc; padding: 20px; border-radius: 8px; border-left: 4px solid #3182ce;">
+                    <h3 style="margin: 0 0 15px 0; color: #2c3e50;">${escapeHtml(title)}</h3>
+                    <div style="margin-bottom: 15px;">
+                        <span style="background: #e8f4fd; color: #1e40af; padding: 5px 12px; border-radius: 12px; font-size: 0.85em; font-weight: 600; margin-right: 10px;">
+                            ${escapeHtml(objectType)}
+                        </span>
+                        <span style="color: #666; font-size: 0.85em; font-family: monospace;">ID: ${escapeHtml(id)}</span>
+                    </div>
+                    <p style="margin: 15px 0 0 0; color: #4a5568; line-height: 1.6;">${escapeHtml(description)}</p>
+                </div>
+            `;
+            
+            displayCurrentKeywords();
+        }
+        
+        function displayCurrentKeywords() {
+            const keywordsContainer = document.getElementById('currentKeywordsList');
+            
+            let keywords = [];
+            
+            // Try different possible keyword field names from I14Y API
+            if (selectedItem.fullObject) {
+                keywords = selectedItem.fullObject.keywords || 
+                          selectedItem.fullObject.keyword || 
+                          selectedItem.fullObject.theme || 
+                          [];
+            } else if (selectedItem.keywords) {
+                keywords = selectedItem.keywords;
+            } else if (selectedItem.keyword) {
+                keywords = selectedItem.keyword;
+            } else if (selectedItem.theme) {
+                keywords = selectedItem.theme;
+            }
+            
+            // Ensure keywords is an array
+            if (!Array.isArray(keywords)) {
+                keywords = [];
+            }
+            
+            if (keywords.length === 0) {
+                keywordsContainer.innerHTML = '<p style="color: #666; font-style: italic;">No keywords found</p>';
+                return;
+            }
+            
+            const keywordsHtml = keywords.map(kw => {
+                let label = '';
+                let uri = kw.uri || '';
+                
+                if (kw.label && typeof kw.label === 'object') {
+                    if (kw.label.multilingual_label) {
+                        label = kw.label.multilingual_label.de || 
+                                kw.label.multilingual_label.fr || 
+                                kw.label.multilingual_label.en || 
+                                kw.label.multilingual_label.it || 
+                                Object.values(kw.label.multilingual_label)[0] || 
+                                'Unknown';
+                    } else {
+                        label = kw.label.de || kw.label.fr || kw.label.en || kw.label.it || 'Unknown';
+                    }
+                } else if (typeof kw.label === 'string') {
+                    label = kw.label;
+                } else {
+                    label = 'Unknown';
+                }
+                
+                return `
+                    <div class="keyword-display-card" style="margin-bottom: 10px; padding: 12px; background: white; border: 1px solid #e2e8f0; border-radius: 6px;">
+                        <div style="font-weight: 600; color: #2c3e50; margin-bottom: 5px;">${escapeHtml(label)}</div>
+                        ${uri ? `<div style="font-size: 0.85em; color: #666; font-family: monospace;">${escapeHtml(uri)}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            keywordsContainer.innerHTML = keywordsHtml;
+        }
+        
+        document.getElementById('generateNewBtn').addEventListener('click', async function() {
+            document.getElementById('loading').style.display = 'block';
+            
+            try {
+                const description = selectedItem.description || selectedItem.title || '';
+                
+                // Call backend to generate keywords
+                const response = await fetch('/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        query: description,
+                        include_synonyms: true
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.keywords) {
+                    // Store generated keywords in sessionStorage
+                    sessionStorage.setItem('generatedKeywords', JSON.stringify(data.keywords));
+                    // Navigate to step 3
+                    window.location.href = '/refine/step3';
+                } else {
+                    throw new Error('No keywords generated');
+                }
+            } catch (error) {
+                document.getElementById('error').textContent = 'Error generating keywords: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        });
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search I14Y Item - Refine Keywords</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                    <h1 class="header-title">I14Y Tools</h1>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
+        <div class="container">
+            <a href="{{ url_for('welcome') }}" class="back-link">Back to Workflow Selection</a>
+            
+            <div class="page-header">
+                <h1>Refine Existing I14Y Keywords</h1>
+                <p class="page-lead">Search for an existing I14Y item and improve its keywords</p>
+            </div>
+            
+            <div class="step-indicator-bar">
+                <div class="step-progress" style="width: 25%;"></div>
+                <span class="step-text">Step 1 of 4: Search I14Y</span>
+            </div>
+            
+            <div class="workflow-section">
+                <h2 class="section-title">🔍 Search for I14Y Item</h2>
+                <p class="section-description">Search for the dataset, dataservice, public service, or concept you want to improve:</p>
+                
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <input type="text" id="i14ySearchInput" class="search-input" 
+                           placeholder="Search I14Y (e.g., 'Seilbahn', 'Energie', 'Verkehr')..." 
+                           style="flex: 1; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px;" />
+                    <button id="i14ySearchBtn" class="search-btn" style="padding: 12px 30px;">Search</button>
+                </div>
+                
+                <div id="i14yResults" style="display: none;"></div>
+                <div id="searchStatus" style="margin-top: 10px; color: #666; font-size: 0.9em;"></div>
+            </div>
+            
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Searching I14Y...</p>
+            </div>
+            
+            <div id="error" class="error" style="display: none;"></div>
+        </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        let cachedSearchResults = [];
+        
+        document.getElementById('i14ySearchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                document.getElementById('i14ySearchBtn').click();
+            }
+        });
+        
+        document.getElementById('i14ySearchBtn').addEventListener('click', async function() {
+            const searchQuery = document.getElementById('i14ySearchInput').value.trim();
+            
+            if (!searchQuery) {
+                document.getElementById('searchStatus').textContent = 'Please enter a search term';
+                return;
+            }
+            
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('searchStatus').textContent = 'Searching...';
+            document.getElementById('i14yResults').style.display = 'none';
+            
+            try {
+                const response = await fetch('/search-i14y-datasets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: searchQuery })
+                });
+                
+                const data = await response.json();
+                
+                if (data.datasets && data.datasets.length > 0) {
+                    cachedSearchResults = data.datasets;
+                    displaySearchResults(data.datasets);
+                    document.getElementById('searchStatus').textContent = `Found ${data.datasets.length} items`;
+                } else {
+                    document.getElementById('searchStatus').textContent = 'No items found';
+                    document.getElementById('i14yResults').style.display = 'none';
+                }
+            } catch (error) {
+                document.getElementById('error').textContent = 'Error searching I14Y: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('searchStatus').textContent = 'Search failed';
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        });
+        
+        function displaySearchResults(results) {
+            const resultsContainer = document.getElementById('i14yResults');
+            resultsContainer.innerHTML = '';
+            
+            results.forEach((result, index) => {
+                const resultCard = document.createElement('div');
+                resultCard.className = 'search-result-card';
+                resultCard.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                        <div style="flex: 1;">
+                            <h4 style="margin: 0 0 8px 0; color: #2c3e50;">${escapeHtml(result.title)}</h4>
+                            ${result.description ? `<p style="margin: 0 0 8px 0; font-size: 0.9em; color: #666;">${escapeHtml(result.description.substring(0, 150))}${result.description.length > 150 ? '...' : ''}</p>` : ''}
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <span style="background: #e8f4fd; color: #1e40af; padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 600;">
+                                    ${escapeHtml(result.objectType || 'dataset')}
+                                </span>
+                                ${result.id ? `<span style="color: #666; font-size: 0.8em; font-family: monospace;">ID: ${escapeHtml(result.id)}</span>` : ''}
+                            </div>
+                        </div>
+                        <button class="select-btn" onclick="selectItem(${index})">Select</button>
+                    </div>
+                `;
+                resultsContainer.appendChild(resultCard);
+            });
+            
+            resultsContainer.style.display = 'block';
+        }
+        
+        function selectItem(index) {
+            const item = cachedSearchResults[index];
+            // Store in sessionStorage and navigate to step 2
+            sessionStorage.setItem('selectedI14YItem', JSON.stringify(item));
+            window.location.href = '/refine/step2';
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
