@@ -25,9 +25,6 @@
     
     <main>
         <div class="container">
-            <a href="{{ url_for('welcome') }}" style="display: inline-flex; align-items: center; color: #3182ce; text-decoration: none; margin-bottom: 15px; font-size: 0.95em;">
-                ← Back to Workflow Selection
-            </a>
             <div class="page-header">
                 <h1>Keyword Generator</h1>
                 <p class="page-lead">Generate compliant keywords following DCAT-AP CH specifications using TERMDAT, GEMET, and Wikidata 
@@ -35,54 +32,42 @@
                 </p>
             </div>
 
-        <!-- I14Y Dataset Search Section -->
-        <div class="search-section" style="background: #f5f5f5; border-top: 3px solid #3182ce;">
-            <h3 style="margin: 0 0 15px 0; color: #2c3e50;">📚 Search I14Y Datasets</h3>
-            <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">Find a dataset in I14Y and use its description to generate keywords:</p>
-            <div style="display: flex; gap: 8px;">
-                <input type="text" id="i14ySearchInput" class="search-input" placeholder="Search for datasets (e.g., 'Seilbahn', 'Energie', 'Verkehr')..." 
-                       style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin: 0;" />
-                <button id="i14ySearchBtn" class="search-btn" style="margin: 0; white-space: nowrap;">Search I14Y</button>
-            </div>
-            <div id="i14yResultsContainer" style="display: none; margin-top: 15px; max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; background: white;"></div>
-            <div id="i14ySearchStatus" style="margin-top: 10px; font-size: 12px; color: #666;"></div>
-        </div>
-
-        <div class="search-section">
+        <div class="workflow-section">
+            <h2 class="section-title">Generate Keywords</h2>
+            <p class="section-description">Enter a keyword or paste a longer text description. Keywords will be searched in TERMDAT, GEMET, and Wikidata vocabularies.</p>
+            
             <div class="search-container">
                 <textarea id="searchInput" class="search-input" rows="3"
                        placeholder="Enter a keyword or paste a longer description (multiple sentences will be analyzed to extract relevant keywords)..." 
-                       style="resize: vertical; min-height: 60px;"></textarea>
-                <div class="search-options" style="margin: 10px 0;">
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                       style="resize: vertical; min-height: 60px; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px;"></textarea>
+                <div class="search-options">
+                    <label>
                         <input type="checkbox" id="includeSynonyms" checked>
                         <span>Include synonyms and related terms</span>
-                        <span id="synonymInfoBtn" class="info-icon" title="Learn about synonym support" style="font-size: 10px; width: 14px; height: 14px; line-height: 14px; cursor: pointer;">?</span>
+                        <span id="synonymInfoBtn" class="info-icon" title="To extract synonyms and related terms, enable this option. The content may been sent to external services like OpenAI for processing.">?</span>
                     </label>
                 </div>
-                <div class="button-group">
-                    <button id="searchBtn" class="search-btn">Generate Keywords</button>
-                    <button id="showJsonBtn" class="search-btn" disabled>Show JSON</button>
-                    <button id="connectI14YBtn" class="search-btn secondary" disabled>Upload to I14Y</button>
+                <div class="button-group" style="display: flex; gap: 10px;">
+                    <button id="searchBtn" class="search-btn" style="padding: 12px 30px;">Generate Keywords</button>
+                    <button id="showJsonBtn" class="search-btn" style="padding: 12px 30px;" disabled>Show JSON</button>
+                    <button id="connectI14YBtn" class="search-btn secondary" style="padding: 12px 30px;" disabled>Upload to I14Y</button>
                 </div>
             </div>
         </div>
         
         <!-- Extracted keywords info section -->
-        <div id="extractedKeywordsSection" class="search-section" style="display: none; background: #e8f4fd; border-left: 4px solid #3182ce;">
-            <h3 style="margin: 0 0 10px 0; color: #2c3e50;">📋 Extracted Keywords</h3>
+        <div id="extractedKeywordsSection" class="workflow-section" style="display: none; background: #e8f4fd; border-left: 4px solid #3182ce;">
+            <h3 style="margin: 0 0 10px 0; color: #2c3e50; font-size: 1.1em; font-weight: 600;">📋 Extracted Keywords</h3>
             <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">The following keywords were extracted from your description and searched in the vocabularies:</p>
             <div id="extractedKeywordsList" style="display: flex; gap: 8px; flex-wrap: wrap;"></div>
         </div>
 
-        <div class="results-section" id="resultsSection" style="display: none;">
-            <div class="results-header">
-                <h2>Generated Keywords</h2>
-                <span class="results-count" id="resultsCount">0 keywords found</span>
+        <div class="workflow-section" id="resultsSection" style="display: none;">
+            <div class="results-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 class="section-title" style="margin: 0;">Generated Keywords</h2>
+                <span class="results-count" id="resultsCount" style="color: #666; font-size: 0.9em;">0 keywords found</span>
             </div>
             <div id="keywordGrid" class="keyword-grid"></div>
-            <div class="button-container" style="display: flex; gap: 15px; margin-top: 20px;">
-            </div>
         </div>
 
         <div id="loading" class="loading" style="display: none;">
@@ -94,11 +79,6 @@
         <div id="statusMessage" class="status" style="display:none;"></div>
 
         <div id="error" class="error" style="display: none;"></div>
-
-        <div id="searchHistorySection" class="search-section" style="display: none;">
-            <h3>Search History</h3>
-            <ul id="searchHistoryList" style="list-style-type: none; padding: 0;"></ul>
-        </div>
         </div>
     </main>
     
@@ -194,115 +174,7 @@
         const selectedKeywords = new Set();
         const searchHistory = [];
 
-        // I14Y Dataset Search Functionality
-        const i14ySearchInput = document.getElementById('i14ySearchInput');
-        const i14ySearchBtn = document.getElementById('i14ySearchBtn');
-        const i14yResultsContainer = document.getElementById('i14yResultsContainer');
-        const i14ySearchStatus = document.getElementById('i14ySearchStatus');
 
-        i14ySearchBtn.addEventListener('click', searchI14YDatasets);
-        i14ySearchInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                searchI14YDatasets();
-            }
-        });
-
-        async function searchI14YDatasets() {
-            const query = i14ySearchInput.value.trim();
-            if (!query) {
-                i14ySearchStatus.textContent = 'Please enter a search term';
-                return;
-            }
-
-            i14ySearchStatus.textContent = '🔍 Searching I14Y datasets...';
-            i14yResultsContainer.style.display = 'none';
-
-            try {
-                const response = await fetch('/search-i14y-datasets', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query })
-                });
-
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || 'Search failed');
-                }
-
-                if (!data.datasets || data.datasets.length === 0) {
-                    i14ySearchStatus.textContent = `No datasets found for "${query}"`;
-                    i14yResultsContainer.style.display = 'none';
-                    return;
-                }
-
-                // Display results
-                i14yResultsContainer.innerHTML = data.datasets.map((dataset, index) => {
-                    // Extract German or first available language for display
-                    const getLocalizedField = (field) => {
-                        if (typeof field === 'string') return field;
-                        if (typeof field === 'object' && field !== null) {
-                            return field.de || field.en || field.fr || field.it || 'N/A';
-                        }
-                        return 'N/A';
-                    };
-                    
-                    const title = getLocalizedField(dataset.title);
-                    const description = getLocalizedField(dataset.description);
-                    const publisher = dataset.publisher || 'I14Y';
-                    const modified = dataset.modified || new Date().toLocaleDateString('de-CH');
-                    const guid = dataset.guid || '';
-                    
-                    return `
-                    <div style="padding: 12px; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s;" 
-                         class="i14y-dataset-result"
-                         data-guid="${guid}"
-                         data-title="${title.replace(/"/g, '&quot;')}"
-                         data-description="${description.replace(/"/g, '&quot;')}"
-                         onmouseover="this.style.background = '#f9f9f9'" 
-                         onmouseout="this.style.background = 'white'">
-                        <div style="font-weight: 600; color: #2c3e50; margin-bottom: 4px;">${title}</div>
-                        <div style="font-size: 13px; color: #666; line-height: 1.4; max-height: 50px; overflow: hidden; text-overflow: ellipsis;">${description}</div>
-                        <div style="font-size: 11px; color: #999; margin-top: 4px;">${publisher} • Modified: ${modified}</div>
-                    </div>
-                    `;
-                }).join('');
-                
-                i14yResultsContainer.style.display = 'block';
-                i14ySearchStatus.textContent = `Found ${data.datasets.length} datasets`;
-                
-                // Attach click handlers to all dataset results
-                document.querySelectorAll('.i14y-dataset-result').forEach(element => {
-                    element.addEventListener('click', function() {
-                        const guid = this.getAttribute('data-guid');
-                        const title = this.getAttribute('data-title');
-                        const description = this.getAttribute('data-description');
-                        selectI14YDataset(description, title, guid);
-                    });
-                });
-
-            } catch (error) {
-                console.error('I14Y search error:', error);
-                i14ySearchStatus.textContent = `Error: ${error.message}`;
-                i14yResultsContainer.style.display = 'none';
-            }
-        }
-
-        function selectI14YDataset(description, title, guid) {
-            // Insert the description into the main search field
-            searchInput.value = description;
-            i14yResultsContainer.style.display = 'none';
-            i14ySearchStatus.textContent = `✓ Loaded: "${title}"`;
-            
-            // Store the GUID globally for later use in upload
-            window.selectedI14YGuid = guid;
-            
-            // Scroll to main search section
-            document.querySelector('.search-section:not(:first-of-type)').scrollIntoView({ behavior: 'smooth' });
-            
-            // Focus on the search input
-            searchInput.focus();
-        }
 
         // Attach click handler for synonym info button (robust fallback)
         const synonymInfoBtn = document.getElementById('synonymInfoBtn');
@@ -326,30 +198,46 @@
         });
 
         showJsonBtn.addEventListener('click', () => {
-            const keywordsArray = Array.from(selectedKeywords).map(keyword => {
-                // Check if keyword has multilingual_label structure
+            // Format keywords exactly as they will be sent to the API
+            const formattedKeywords = Array.from(selectedKeywords).map(keyword => {
+                const keyword_obj = {
+                    label: {},
+                    uri: keyword.uri || ''
+                };
+                
+                // Handle multilingual_label (from TERMDAT/GEMET/Wikidata)
                 if (keyword.multilingual_label) {
-                    // Use the actual multilingual labels
-                    const multilingualKeyword = {};
-                    ['de', 'fr', 'it', 'en'].forEach(lang => {
-                        if (keyword.multilingual_label[lang]) {
-                            multilingualKeyword[lang] = keyword.multilingual_label[lang];
-                        }
-                    });
-                    return multilingualKeyword;
-                } else {
-                    // Fallback for old format
-                    return {
-                        de: keyword.label || keyword.de,
-                        en: keyword.label || keyword.en,
-                        fr: keyword.label || keyword.fr,
-                        it: keyword.label || keyword.it
+                    keyword_obj.label = {
+                        de: keyword.multilingual_label.de || '',
+                        en: keyword.multilingual_label.en || '',
+                        fr: keyword.multilingual_label.fr || '',
+                        it: keyword.multilingual_label.it || '',
+                        rm: keyword.multilingual_label.rm || ''
                     };
                 }
+                // Handle plain label string (fallback)
+                else if (keyword.label) {
+                    const label_text = keyword.label;
+                    keyword_obj.label = {
+                        de: label_text,
+                        en: label_text,
+                        fr: label_text,
+                        it: label_text,
+                        rm: label_text
+                    };
+                }
+                
+                return keyword_obj;
             });
 
-            const jsonOutput = JSON.stringify({ keywords: keywordsArray }, null, 2);
-            alert(jsonOutput);
+            // Create the JSON structure
+            const jsonData = {
+                keywords: formattedKeywords
+            };
+            
+            const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            window.open(url, '_blank');
         });
 
         async function performSearch() {
@@ -367,15 +255,27 @@
 
             try {
                 const includeSynonyms = document.getElementById('includeSynonyms').checked;
-                // Inform the user whether synonyms will be included
-                if (includeSynonyms) {
-                    setStatus('Looking for synonyms and related terms...', 'synonyms');
+                const wordCount = query.split(/\s+/).filter(w => w.length > 0).length;
+                
+                // Determine workflow based on word count and synonyms setting
+                let useDirectSearch = wordCount < 6;
+                
+                if (useDirectSearch && !includeSynonyms) {
+                    // Direct search: Query TERMDAT, GEMET, Wikidata with entered words
+                    setStatus(`Searching vocabularies with ${wordCount} keyword(s)...`, 'default');
+                } else if (useDirectSearch && includeSynonyms) {
+                    // Use NLP/AI to extract/expand keywords, then search
+                    setStatus('Extracting keywords and finding synonyms...', 'synonyms');
+                } else if (!useDirectSearch && includeSynonyms) {
+                    // Long text: extract keywords with NLP/AI, then search
+                    setStatus('Analyzing text to extract keywords...', 'synonyms');
                 } else {
-                    setStatus('Skipping synonym expansion', 'default');
+                    // Long text without synonyms: extract keywords, then direct search
+                    setStatus('Extracting keywords from text...', 'default');
                 }
 
                 // Next stage: querying backend services
-                setStatus('Querying TERMDAT, Wikidata, and GEMET...', 'termdat');
+                setStatus('Querying TERMDAT, GEMET, and Wikidata...', 'termdat');
                 const response = await fetch('/search', {
                     method: 'POST',
                     headers: {
@@ -384,7 +284,8 @@
                     body: JSON.stringify({ 
                         query: query,
                         lang: 'de',  // Default to German as query language
-                        include_synonyms: includeSynonyms
+                        include_synonyms: includeSynonyms,
+                        direct_search: useDirectSearch && !includeSynonyms
                     })
                 });
 

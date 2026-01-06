@@ -45,10 +45,12 @@
             <!-- Overview Tab -->
             <div id="overview" class="tab-content active">
                 <p><strong>Selected Keywords Summary:</strong></p>
-                <div id="keywordSummary"></div>
+                <p><div id="keywordSummary"></div></p>
                 
+                <h3>Dataset GUID</h3>
                 <input type="text" id="datasetGuid" class="input-field" placeholder="Enter dataset GUID" />
-                <input type="password" id="i14yToken" class="input-field" placeholder="Enter your I14Y token (with or without 'Bearer' prefix)" />
+                <h3>I14Y Token</h3>
+                <input type="password" id="i14yToken" class="input-field" placeholder="Enter your I14Y token" />
                 
                 <div style="display: flex; gap: 10px; align-items: center; margin-top: 20px;">
                     <button id="uploadBtn" class="action-btn">Add Keywords to I14Y</button>

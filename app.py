@@ -1612,24 +1612,40 @@ def search_keywords():
     query = request.json.get('query', '').strip()
     query_lang = request.json.get('lang', 'de').strip().lower()
     include_synonyms = request.json.get('include_synonyms', True)  # Default to True
+    direct_search = request.json.get('direct_search', False)  # Direct search without NLP extraction
     source_filter = request.json.get('source', 'all').lower()  # termdat, gemet, wikidata, or all
     
     if not query:
         return jsonify({'error': 'Query is required'}), 400
     
-    # Check cache first (include synonyms and source in cache key)
-    cache_key = f"{query}:{query_lang}:{include_synonyms}:{source_filter}"
+    # Check cache first (include synonyms, direct_search, and source in cache key)
+    cache_key = f"{query}:{query_lang}:{include_synonyms}:{direct_search}:{source_filter}"
     cached_result = cache.get(cache_key)
     if cached_result:
         return jsonify(cached_result)
 
     try:
-        # Extract keywords to show user what was searched
-        extracted_keywords = keyword_generator._extract_keywords_from_text(query, max_keywords=5)
+        # Determine which keywords to search based on workflow
+        if direct_search:
+            # Direct search: use the entered words directly without NLP extraction
+            # Split the query into individual words
+            extracted_keywords = [w.strip() for w in query.split() if w.strip()]
+        else:
+            # Extract keywords using NLP/AI (for longer texts or when synonyms are enabled)
+            extracted_keywords = keyword_generator._extract_keywords_from_text(query, max_keywords=5)
         
         # Generate keywords based on source filter
         if source_filter == 'all':
-            keywords = keyword_generator.generate_keywords(query, query_lang, include_synonyms)
+            if direct_search:
+                # Direct search mode: search each word individually
+                keywords = []
+                for keyword in extracted_keywords:
+                    keywords.extend(keyword_generator.search_termdat(keyword, query_lang, include_synonyms))
+                    keywords.extend(keyword_generator.search_gemet(keyword))
+                    keywords.extend(keyword_generator.search_wikidata(keyword))
+            else:
+                # Normal mode: use the full generate_keywords workflow
+                keywords = keyword_generator.generate_keywords(query, query_lang, include_synonyms)
         else:
             keywords = []
             for keyword in extracted_keywords:

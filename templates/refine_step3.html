@@ -369,6 +369,24 @@
                 const thematicArea = extractThematicArea(kw);
                 const isExisting = kw.isExisting;
                 
+                // Get available languages for this keyword
+                const availableLanguages = [];
+                if (kw.multilingual_label && typeof kw.multilingual_label === 'object') {
+                    Object.keys(kw.multilingual_label).forEach(lang => {
+                        if (kw.multilingual_label[lang] && kw.multilingual_label[lang].trim()) {
+                            availableLanguages.push(lang);
+                        }
+                    });
+                }
+                
+                // Create language indicators
+                let languageIndicators = '';
+                if (availableLanguages.length > 0) {
+                    languageIndicators = `<div class="language-indicators">${availableLanguages.map(lang => 
+                        `<span class="lang-tag" title="${lang.toUpperCase()}: ${escapeHtml(kw.multilingual_label[lang])}">${lang.toUpperCase()}</span>`
+                    ).join('')}</div>`;
+                }
+                
                 const sourceColor = source.toLowerCase() === 'termdat' ? '#059669' :
                                    source.toLowerCase() === 'gemet' ? '#7c3aed' :
                                    source.toLowerCase() === 'wikidata' ? '#2563eb' :
@@ -382,10 +400,9 @@
                     <div class="${cardClass}" draggable="true" data-index="${index}">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                             <div style="flex: 1;">
+                                <div class="keyword-source" style="background: ${sourceColor};">${escapeHtml(source.toUpperCase())}</div>
                                 <div class="keyword-title">${escapeHtml(label)}</div>
-                                <div style="font-size: 0.85em; color: #666; margin-top: 4px;">
-                                    Source: <span style="color: ${sourceColor}; font-weight: 600;">${escapeHtml(source.toUpperCase())}</span>
-                                </div>
+                                ${languageIndicators}
                                 ${thematicArea ? `<div class="keyword-meta">${escapeHtml(thematicArea)}</div>` : ''}
                                 ${uri ? `<div class="keyword-uri"><a href="${escapeHtml(uri)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">${escapeHtml(uri)}</a></div>` : ''}
                                 <div style="margin-top: 6px; font-size: 0.8em; color: ${statusColor}; font-weight: 600;">${statusText}</div>

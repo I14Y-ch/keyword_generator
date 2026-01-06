@@ -294,7 +294,13 @@
                 
                 if (!label) label = 'Unknown';
                 
-                const langInfo = langs.length ? `Languages: ${langs.join(', ')}` : 'Languages: n/a';
+                // Create language indicators
+                let languageIndicators = '';
+                if (langs.length > 0) {
+                    languageIndicators = `<div class="language-indicators">${langs.map(lang => 
+                        `<span class="lang-tag" title="${lang.toUpperCase()}: Available">${lang.toUpperCase()}</span>`
+                    ).join('')}</div>`;
+                }
                 
                 const sourceColor = sourceTag === 'TERMDAT' ? '#059669' :
                                    sourceTag === 'GEMET' ? '#7c3aed' :
@@ -302,11 +308,9 @@
                 
                 return `
                     <div class="keyword-card">
+                        <div class="keyword-source" style="background: ${sourceColor};">${escapeHtml(sourceTag || 'LOCAL')}</div>
                         <div class="keyword-title">${escapeHtml(label)}</div>
-                        <div style="font-size: 0.85em; color: #666; margin-top: 4px;">
-                            ${uri ? `Source: <span style="color: ${sourceColor}; font-weight: 600;">${escapeHtml(sourceTag)}</span>` : 'Source: <span style="color: #888; font-weight: 600;">LOCAL</span>'}
-                        </div>
-                        <div style="font-size: 0.85em; color: #888; margin-top: 4px;">${escapeHtml(langInfo)}</div>
+                        ${languageIndicators}
                         ${uri ? `<div class="keyword-uri" style="margin-top: 4px;"><a href="${escapeHtml(uri)}" target="_blank" rel="noopener noreferrer">${escapeHtml(uri)}</a></div>` : ''}
                     </div>
                 `;
