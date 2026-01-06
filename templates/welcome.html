@@ -25,17 +25,15 @@
         <div class="container">
             <div class="page-header">
                 <h1>Keyword Generator</h1>
-                <p class="page-lead">Choose your workflow to generate DCAT-AP CH compliant keywords for I14Y items</p>
+                <p class="page-lead">Choose your workflow to generate DCAT-AP CH compliant keywords for entries on the interoperability platform I14Y. </p>
             </div>
             
             <div class="workflow-container">
                 <!-- Use Case 1: Refine existing I14Y keywords -->
                 <div class="workflow-card" onclick="window.location.href='{{ url_for('refine') }}'">
-                    <div class="workflow-icon">🔍</div>
-                    <div class="use-case-badge">Use Case 1</div>
-                    <h2 class="workflow-title">Refine Existing I14Y Item</h2>
+                    <h2 class="workflow-title">Refine Existing I14Y Entries</h2>
                     <p class="workflow-description">
-                        You have a dataset, dataservice, public service, or concept already published on I14Y, but need to improve or regenerate its keywords.
+                        You have a dataset, dataservice, public service, or concept description already published on I14Y, but need to improve its keywords.
                     </p>
                     <ul class="workflow-features">
                         <li>Search for existing I14Y items</li>
@@ -48,8 +46,6 @@
                 
                 <!-- Use Case 2: Start from scratch -->
                 <div class="workflow-card" onclick="window.location.href='{{ url_for('index') }}'">
-                    <div class="workflow-icon">✨</div>
-                    <div class="use-case-badge">Use Case 2</div>
                     <h2 class="workflow-title">Generate from Description</h2>
                     <p class="workflow-description">
                         You're starting from scratch with just a description and want to produce keywords for your item.

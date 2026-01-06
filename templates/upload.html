@@ -6,152 +6,6 @@
     <title>I14Y - Upload Keywords</title>
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-    <style>
-        /* Component-specific overrides */
-        }
-        .container {
-            max-width: 1200px;
-            margin: 120px auto 20px;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-            overflow: hidden;
-        
-        /* Tab styling - use consistent colors
-        /* Tab styling */
-        .tabs {
-            display: flex;
-            border-bottom: 2px solid #e2e8f0;
-            margin-bottom: 20px;
-        }
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            transition: all 0.3s ease;
-            font-weight: 500;
-        }
-        .tab.active {
-            border-bottom-color: #4c63d2;
-            color: #4c63d2;
-        }
-        .tab:hover {
-            background-color: #f8fafc;
-        }
-        .tab-content {
-            display: none;
-        }
-        .tab-content.active {
-            display: block;
-        }
-        
-        /* Keyword cards for tab view */
-        .keyword-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 15px;
-            margin-top: 20px;
-        }var(--primary-color);
-            color: var(--primary-color)
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 15px;
-            transition: all 0.3s ease;
-        }
-        .keyword-card:hover {
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        }
-        .keyword-source {
-            font-size: 0.8em;
-            font-weight: 600;
-            color: white;
-            padding: 4px 8px;
-            border-radius: 4px;
-            margin-bottom: 8px;
-            display: inline-block;
-        }
-        .keyword-source.termdat { background: #059669; }
-        .keyword-source.gemet { background: #7c3aed; }
-        .keyword-source.wikidata { background: #2563eb; }
-        .keyword-label {
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-        .keyword-description {
-            font-size: 0.9em;
-            color: #6b7280;
-            margin-bottom: 8px;
-        }
-        .keyword-uri a {
-            font-size: 0.8em;
-            color: #4c63d2;
-            text-decoration: none;
-        }
-        
-        .input-field {
-            width: 100%;
-            padding: 15px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-size: 1em;
-            transition: border-color 0.3s ease;
-        }
-        .input-field:focus {
-            border-color: #4c63d2;
-            outline: none;
-        }
-        .action-btn {
-            padding: 15px 30px;
-            background: #059669;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 1em;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-right: 10px;
-        }
-        .action-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(5, 150, 105, 0.3);
-        }
-        .action-btn.secondary {
-            background: #6b7280;
-        }
-        .action-btn.secondary:hover {
-            box-shadow: 0 5px 15px rgba(107, 114, 128, 0.3);
-        }
-        
-        .success-message {
-            background: #d1fae5;
-            border: 1px solid #10b981;
-            color: #065f46;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .success-message a {
-            color: #059669;
-            font-weight: 600;
-        }
-        
-        .language-indicators {
-            margin: 8px 0;
-            font-size: 0.85em;
-        }
-        
-        .lang-tag {
-            background: #e2e8f0;
-            color: #475569;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 0.75em;
-            font-weight: 600;
-            margin-right: 5px;
-        }
-    </style>
 </head>
 <body>
     <div class="beta-badge">Beta</div>
@@ -160,8 +14,10 @@
         <div class="header-wrapper">
             <div class="layout-brand">
                 <div class="brand-left">
-                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
-                    <h1 class="header-title">I14Y Tools</h1>
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
                 </div>
             </div>
         </div>

@@ -6,6 +6,7 @@
     <title>Review Generated Keywords - Refine Keywords</title>
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+
 </head>
 <body>
     <div class="beta-badge">Beta</div>
@@ -14,8 +15,10 @@
         <div class="header-wrapper">
             <div class="layout-brand">
                 <div class="brand-left">
-                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
-                    <h1 class="header-title">I14Y Tools</h1>
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
                 </div>
             </div>
         </div>
@@ -23,45 +26,81 @@
     
     <main>
         <div class="container">
-            <a href="{{ url_for('refine_step2') }}" class="back-link">Back to Item Details</a>
-            
             <div class="page-header">
-                <h1>Review Generated Keywords</h1>
-                <p class="page-lead">Select keywords to update on I14Y</p>
+                <h1>Review & Arrange Keywords</h1>
+                <p class="page-lead">Review proposed keywords, delete unwanted ones, and drag to reorder</p>
             </div>
-            
-            <div class="step-indicator-bar">
-                <div class="step-progress" style="width: 75%;"></div>
-                <span class="step-text">Step 3 of 4: Generate New</span>
-            </div>
-            
+
+            <ul class="steps-nav">
+                <li class="step-item">
+                    <a href="/refine/step1" class="step-link completed">
+                        <span class="step-number">1</span>
+                        <span>Search I14Y</span>
+                    </a>
+                </li>
+                <li class="step-arrow">→</li>
+                <li class="step-item">
+                    <a href="/refine/step2" class="step-link completed">
+                        <span class="step-number">2</span>
+                        <span>Review Item</span>
+                    </a>
+                </li>
+                <li class="step-arrow">→</li>
+                <li class="step-item">
+                    <span class="step-link active">
+                        <span class="step-number">3</span>
+                        <span>Arrange & Update</span>
+                    </span>
+                </li>
+            </ul>
+
             <div class="workflow-section">
-                <h2 class="section-title">✨ Keyword Comparison</h2>
                 
-                <div class="keyword-comparison">
-                    <div class="keyword-column current">
-                        <h4>Current Keywords</h4>
-                        <div id="comparisonCurrent"></div>
-                    </div>
-                    <div class="keyword-column proposed">
-                        <h4>Proposed Keywords</h4>
-                        <div class="selection-info">
-                            💡 Click on keywords to select/deselect them. <span id="selectionCount" style="font-weight: 600;">0 selected</span>
-                        </div>
-                        <div id="comparisonProposed"></div>
+                <div id="loadingStatus" style="display:none; margin-bottom:20px; padding:15px; background:#f0f9ff; border-left:4px solid #0ea5e9; border-radius:6px;">
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        <div class="spinner" style="width:20px; height:20px; border-width:3px;"></div>
+                        <span id="statusText" style="font-weight:600; color:#0c4a6e;">Initializing...</span>
                     </div>
                 </div>
                 
-                <div style="margin-top: 30px; display: flex; gap: 15px;">
-                    <button id="showJsonBtn" class="search-btn secondary">View JSON</button>
-                    <button id="proceedToUpdateBtn" class="search-btn" disabled>
-                        Proceed to Update (<span id="updateCount">0</span> selected) →
+                <div class="keyword-section">
+                    <div class="selection-info" style="margin-bottom:12px; display:flex; flex-direction:column; gap:4px;">
+                        <span id="keywordCount" style="font-weight: 600;">0 keywords total</span>
+                        <span style="font-size:0.9em; color:#6b7280;">Drag and drop to reorder, click ✕ to delete unwanted keywords</span>
+                    </div>
+                    <div id="combinedKeywordsGrid" class="keyword-grid"></div>
+                </div>
+                <div style="margin-top: 30px; display: flex; gap: 15px; flex-wrap: wrap;">
+                    <button id="viewJsonBtn" class="search-btn secondary" title="Display the JSON code. It can be copied and sent manually to the I14Y API using the partner api (https://apiconsole.i14y.admin.ch).">View JSON</button>
+                    <button id="proceedToUpdateBtn" class="search-btn" title="Append the keywords to the existing entry on I14Y. A user token is needed. Be aware: Don't use your personal token if you don't trust the application. If you don't trust, use the View JSON button.">
+                        Update on I14Y
                     </button>
                 </div>
             </div>
             
             <div id="error" class="error" style="display: none;"></div>
+            <div id="success" style="display: none; margin-top: 20px;"></div>
         </div>
+    
+    <!-- Modal for API Token -->
+    <div id="tokenModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+        <div style="background: white; padding: 30px; border-radius: 8px; max-width: 500px; width: 90%; box-shadow: 0 10px 40px rgba(0,0,0,0.3);">
+            <h3 style="margin: 0 0 20px 0; color: #1f2937;">Enter API Token</h3>
+            <p style="margin: 0 0 20px 0; color: #6b7280; font-size: 0.95em;">
+                You need a valid I14Y Partner API token to update keywords. The token should start with "Bearer ".
+            </p>
+            <input type="text" id="modalApiToken" placeholder="Bearer eyJ..." style="width: 100%; padding: 12px; border: 2px solid #e2e8f0; border-radius: 6px; font-family: monospace; font-size: 0.9em; margin-bottom: 20px;">
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button id="cancelTokenBtn" class="search-btn secondary" style="padding: 10px 20px;">Cancel</button>
+                <button id="confirmTokenBtn" class="search-btn" style="padding: 10px 20px;">Update Keywords</button>
+            </div>
+            <div id="modalLoading" style="display: none; margin-top: 15px; text-align: center;">
+                <div class="spinner" style="margin: 0 auto 10px;"></div>
+                <p style="color: #6b7280; font-size: 0.9em;">Updating keywords...</p>
+            </div>
+            <div id="modalError" class="error" style="display: none; margin-top: 15px;"></div>
+        </div>
+    </div>
     </main>
     
     <footer>
@@ -84,108 +123,148 @@
     <script>
         let selectedItem = null;
         let generatedKeywords = [];
-        let selectedKeywords = new Set();
+        let existingKeywords = [];
+        let combinedKeywords = []; // Combined array for display and reordering
+        const LANG_KEYS = ['de', 'fr', 'it', 'en', 'rm'];
         
         window.addEventListener('DOMContentLoaded', function() {
             const storedItem = sessionStorage.getItem('selectedI14YItem');
-            const storedKeywords = sessionStorage.getItem('generatedKeywords');
+            const storedQuery = sessionStorage.getItem('keywordQuery');
             
-            if (!storedItem || !storedKeywords) {
+            if (!storedItem) {
                 window.location.href = '/refine/step1';
                 return;
             }
             
             selectedItem = JSON.parse(storedItem);
-            generatedKeywords = JSON.parse(storedKeywords);
+            existingKeywords = extractExistingKeywords();
+            combinedKeywords = [...existingKeywords]; // Start with existing keywords
+            displayCombinedKeywords();
+            updateKeywordCount();
+            sessionStorage.setItem('finalKeywords', JSON.stringify(combinedKeywords));
             
-            displayComparison();
+            if (storedQuery) {
+                // Progressive generation mode
+                startProgressiveGeneration(storedQuery);
+            } else {
+                // Fallback: check for pre-generated keywords
+                const storedKeywords = sessionStorage.getItem('generatedKeywords');
+                if (storedKeywords) {
+                    prepareNewKeywords(JSON.parse(storedKeywords));
+                    displayCombinedKeywords();
+                } else {
+                    window.location.href = '/refine/step1';
+                }
+            }
         });
         
-        function displayComparison() {
-            // Display current keywords
-            const currentContainer = document.getElementById('comparisonCurrent');
-            let currentKeywords = [];
+        async function startProgressiveGeneration(query) {
+            document.getElementById('loadingStatus').style.display = 'block';
+            document.getElementById('statusText').textContent = 'Initializing keyword generation...';
+            generatedKeywords = [];
             
-            // Try different possible keyword field names from I14Y API
-            if (selectedItem.fullObject) {
-                currentKeywords = selectedItem.fullObject.keywords || 
-                                 selectedItem.fullObject.keyword || 
-                                 selectedItem.fullObject.theme || 
-                                 [];
-            } else if (selectedItem.keywords) {
-                currentKeywords = selectedItem.keywords;
-            } else if (selectedItem.keyword) {
-                currentKeywords = selectedItem.keyword;
-            } else if (selectedItem.theme) {
-                currentKeywords = selectedItem.theme;
+            try {
+                // Use the new progressive generation endpoint
+                const response = await fetch('/generate-progressive-keywords', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        i14y_item: selectedItem.fullObject || selectedItem,
+                        lang: 'de'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.keywords) {
+                    prepareNewKeywords(data.keywords);
+                    displayCombinedKeywords();
+                } else {
+                    throw new Error(data.error || 'Failed to generate keywords');
+                }
+            } catch (error) {
+                document.getElementById('error').textContent = 'Error generating keywords: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+                console.error('Progressive generation error:', error);
+                displayCombinedKeywords();
+            } finally {
+                document.getElementById('loadingStatus').style.display = 'none';
+                sessionStorage.removeItem('keywordQuery');
             }
-            
-            // Ensure currentKeywords is an array
-            if (!Array.isArray(currentKeywords)) {
-                currentKeywords = [];
-            }
-            
-            if (currentKeywords.length === 0) {
-                currentContainer.innerHTML = '<p style="color: #666; font-style: italic;">No current keywords</p>';
-            } else {
-                currentContainer.innerHTML = currentKeywords.map(kw => {
-                    let label = extractLabel(kw);
-                    let uri = kw.uri || '';
-                    
-                    return `
-                        <div class="keyword-display-card" style="margin-bottom: 10px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
-                            <div style="font-weight: 600; color: #2c3e50; margin-bottom: 5px;">${escapeHtml(label)}</div>
-                            ${uri ? `<div style="font-size: 0.85em; color: #666; font-family: monospace; word-break: break-all;">${escapeHtml(uri)}</div>` : ''}
-                        </div>
-                    `;
-                }).join('');
-            }
-            
-            // Display proposed keywords
-            displayProposedKeywords();
         }
         
         function displayProposedKeywords() {
-            const proposedContainer = document.getElementById('comparisonProposed');
+            const proposedContainer = document.getElementById('proposedGrid');
             
             if (generatedKeywords.length === 0) {
-                proposedContainer.innerHTML = '<p style="color: #666; font-style: italic;">No keywords generated</p>';
+                proposedContainer.innerHTML = '<p style="color: #666; font-style: italic;">No new keywords generated yet</p>';
+                updateKeywordCount();
+                persistKeywords();
                 return;
             }
-            
+
             proposedContainer.innerHTML = generatedKeywords.map((kw, index) => {
-                const isSelected = selectedKeywords.has(index);
+                const label = extractProposedLabel(kw);
+                const source = (kw.source || 'Unknown');
+                const uri = kw.uri || '';
+                const thematicArea = extractThematicArea(kw);
                 
+                const sourceColor = source.toLowerCase() === 'termdat' ? '#059669' :
+                                   source.toLowerCase() === 'gemet' ? '#7c3aed' :
+                                   source.toLowerCase() === 'wikidata' ? '#2563eb' :
+                                   '#64748b';
+
                 return `
-                    <div class="proposed-keyword-card ${isSelected ? 'selected' : ''}" 
-                         onclick="toggleKeyword(${index})"
-                         style="margin-bottom: 10px; padding: 12px; background: white; border-radius: 6px; cursor: pointer; border: 2px solid ${isSelected ? '#059669' : 'transparent'}; transition: all 0.2s ease;">
-                        <div style="font-weight: 600; color: #2c3e50; margin-bottom: 5px;">${escapeHtml(kw.label_de || kw.label || 'Unknown')}</div>
-                        ${kw.uri ? `<div style="font-size: 0.85em; color: #666; font-family: monospace; word-break: break-all;">${escapeHtml(kw.uri)}</div>` : ''}
-                        <div style="font-size: 0.8em; color: #999; margin-top: 5px;">
-                            Source: ${escapeHtml(kw.source || 'Unknown')}
+                    <div class="keyword-card new-keyword-card" draggable="true" data-index="${index}">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                            <div style="flex: 1;">
+                                <div class="keyword-title">${escapeHtml(label)}</div>
+                                <div style="font-size: 0.85em; color: #666; margin-top: 4px;">
+                                    Source: <span style="color: ${sourceColor}; font-weight: 600;">${escapeHtml(source.toUpperCase())}</span>
+                                </div>
+                                ${thematicArea ? `<div class="keyword-meta">${escapeHtml(thematicArea)}</div>` : ''}
+                                ${uri ? `<div class="keyword-uri"><a href="${escapeHtml(uri)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">${escapeHtml(uri)}</a></div>` : ''}
+                            </div>
+                            <button class="icon-btn" title="Remove" onclick="removeKeyword(${index}); event.stopPropagation();">✕</button>
                         </div>
                     </div>
                 `;
             }).join('');
             
-            updateSelectionCount();
+            attachDragHandlers();
+            updateKeywordCount();
+            persistKeywords();
         }
         
-        function toggleKeyword(index) {
-            if (selectedKeywords.has(index)) {
-                selectedKeywords.delete(index);
-            } else {
-                selectedKeywords.add(index);
-            }
-            displayProposedKeywords();
+        function removeKeyword(index) {
+            combinedKeywords.splice(index, 1);
+            displayCombinedKeywords();
         }
         
-        function updateSelectionCount() {
-            const count = selectedKeywords.size;
-            document.getElementById('selectionCount').textContent = count + ' selected';
-            document.getElementById('updateCount').textContent = count;
-            document.getElementById('proceedToUpdateBtn').disabled = count === 0;
+        function attachCombinedDragHandlers() {
+            const items = document.querySelectorAll('.keyword-card[draggable="true"]');
+            let draggedIndex = null;
+            items.forEach(item => {
+                item.addEventListener('dragstart', (e) => {
+                    draggedIndex = parseInt(e.currentTarget.dataset.index, 10);
+                    e.dataTransfer.effectAllowed = 'move';
+                });
+                item.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    item.classList.add('drag-over');
+                });
+                item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+                item.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    item.classList.remove('drag-over');
+                    const targetIndex = parseInt(e.currentTarget.dataset.index, 10);
+                    if (draggedIndex === null || targetIndex === draggedIndex) return;
+                    const moved = combinedKeywords.splice(draggedIndex, 1)[0];
+                    combinedKeywords.splice(targetIndex, 0, moved);
+                    displayCombinedKeywords();
+                });
+            });
         }
         
         function extractLabel(kw) {
@@ -205,31 +284,392 @@
             }
             return 'Unknown';
         }
-        
-        document.getElementById('showJsonBtn').addEventListener('click', function() {
-            const selected = Array.from(selectedKeywords).map(index => generatedKeywords[index]);
+
+        // Proposed keyword labels come from sanitized backend response: multilingual_label or legacy label_xx fields
+        function extractProposedLabel(kw) {
+            if (kw.multilingual_label && typeof kw.multilingual_label === 'object') {
+                const ml = kw.multilingual_label;
+                return ml.de || ml.fr || ml.en || ml.it || ml.rm || Object.values(ml)[0] || 'Unknown';
+            }
+            if (kw.label && typeof kw.label === 'object') {
+                return kw.label.de || kw.label.fr || kw.label.en || kw.label.it || kw.label.rm || Object.values(kw.label)[0] || 'Unknown';
+            }
+            if (kw.label_de || kw.label_fr || kw.label_en || kw.label_it || kw.label_rm) {
+                return kw.label_de || kw.label_fr || kw.label_en || kw.label_it || kw.label_rm || 'Unknown';
+            }
+            if (typeof kw.label === 'string') {
+                return kw.label;
+            }
+            return 'Unknown';
+        }
+
+        // Extract thematic area / collection info (e.g., TERMDAT collection name)
+        function extractThematicArea(kw) {
+            if (!kw || typeof kw !== 'object') return '';
+            const source = (kw.source || '').toLowerCase();
+
+            // Dedicated fields if ever provided
+            if (kw.collection) return kw.collection;
+            if (kw.collection_name) return kw.collection_name;
+            if (kw.thematic_area) return kw.thematic_area;
+
+            const desc = (kw.description || '').toString().trim();
+            if (!desc) return '';
+
+            // Prioritize TERMDAT descriptions which carry the collection title
+            if (source === 'termdat' || desc.toLowerCase().startsWith('termdat:')) {
+                return desc;
+            }
+
+            // Fallback: only surface other sources if they explicitly carry thematic text
+            return '';
+        }
+
+        function normalizeLabel(label) {
+            return (label || '')
+                .toString()
+                .toLowerCase()
+                .trim()
+                .replace(/\s+/g, ' ');
+        }
+
+        function updateKeywordCount() {
+            const total = combinedKeywords.length;
+            const existingCount = combinedKeywords.filter(kw => kw.isExisting).length;
+            const newCount = combinedKeywords.filter(kw => !kw.isExisting).length;
+            const countEl = document.getElementById('keywordCount');
+            if (!countEl) return;
+            countEl.textContent = `${total} keywords total (existing: ${existingCount}, new: ${newCount})`;
+        }
+
+        function getCombinedKeywords() {
+            return combinedKeywords;
+        }
+
+        function persistKeywords() {
+            sessionStorage.setItem('generatedKeywords', JSON.stringify(combinedKeywords.filter(kw => !kw.isExisting)));
+            sessionStorage.setItem('finalKeywords', JSON.stringify(getCombinedKeywords()));
+        }
+
+        function displayCombinedKeywords() {
+            const container = document.getElementById('combinedKeywordsGrid');
+            if (!container) return;
             
+            if (combinedKeywords.length === 0) {
+                container.innerHTML = '<p style="color: #666; font-style: italic;">No keywords available</p>';
+                updateKeywordCount();
+                persistKeywords();
+                return;
+            }
+
+            container.innerHTML = combinedKeywords.map((kw, index) => {
+                const label = extractProposedLabel(kw);
+                const uri = kw.uri || '';
+                const source = kw.source || detectSourceFromUri(uri) || 'LOCAL';
+                const thematicArea = extractThematicArea(kw);
+                const isExisting = kw.isExisting;
+                
+                const sourceColor = source.toLowerCase() === 'termdat' ? '#059669' :
+                                   source.toLowerCase() === 'gemet' ? '#7c3aed' :
+                                   source.toLowerCase() === 'wikidata' ? '#2563eb' :
+                                   '#64748b';
+
+                const cardClass = isExisting ? 'keyword-card existing-keyword-card' : 'keyword-card new-keyword-card';
+                const statusText = isExisting ? 'From I14Y' : 'New keyword';
+                const statusColor = isExisting ? '#0f766e' : '#2563eb';
+
+                return `
+                    <div class="${cardClass}" draggable="true" data-index="${index}">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                            <div style="flex: 1;">
+                                <div class="keyword-title">${escapeHtml(label)}</div>
+                                <div style="font-size: 0.85em; color: #666; margin-top: 4px;">
+                                    Source: <span style="color: ${sourceColor}; font-weight: 600;">${escapeHtml(source.toUpperCase())}</span>
+                                </div>
+                                ${thematicArea ? `<div class="keyword-meta">${escapeHtml(thematicArea)}</div>` : ''}
+                                ${uri ? `<div class="keyword-uri"><a href="${escapeHtml(uri)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">${escapeHtml(uri)}</a></div>` : ''}
+                                <div style="margin-top: 6px; font-size: 0.8em; color: ${statusColor}; font-weight: 600;">${statusText}</div>
+                            </div>
+                            <button class="icon-btn" title="Remove" onclick="removeKeyword(${index}); event.stopPropagation();">✕</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            attachCombinedDragHandlers();
+            updateKeywordCount();
+            persistKeywords();
+        }
+
+        function extractExistingKeywords() {
+            let keywords = [];
+            if (selectedItem && selectedItem.fullObject) {
+                keywords = selectedItem.fullObject.keywords ||
+                           selectedItem.fullObject.keyword ||
+                           selectedItem.fullObject.theme || [];
+            } else if (selectedItem && selectedItem.keywords) {
+                keywords = selectedItem.keywords;
+            } else if (selectedItem && selectedItem.keyword) {
+                keywords = selectedItem.keyword;
+            } else if (selectedItem && selectedItem.theme) {
+                keywords = selectedItem.theme;
+            }
+
+            if (!Array.isArray(keywords)) {
+                return [];
+            }
+
+            const normalized = [];
+            keywords.forEach(raw => {
+                const normalizedKw = normalizeExistingKeyword(raw);
+                if (normalizedKw) {
+                    normalized.push(normalizedKw);
+                }
+            });
+            return normalized;
+        }
+
+        function normalizeExistingKeyword(raw) {
+            const keyword = {
+                uri: '',
+                source: 'I14Y',
+                multilingual_label: {}
+            };
+
+            if (typeof raw === 'string') {
+                keyword.multilingual_label.de = raw;
+            } else if (raw && typeof raw === 'object') {
+                keyword.uri = raw.uri || raw._uri || '';
+                keyword.source = raw.source || detectSourceFromUri(keyword.uri) || 'I14Y';
+
+                const labelField = raw.label;
+                if (typeof labelField === 'string') {
+                    keyword.multilingual_label.de = labelField;
+                } else if (labelField && typeof labelField === 'object') {
+                    if (labelField.multilingual_label && typeof labelField.multilingual_label === 'object') {
+                        mergeLabelSet(keyword.multilingual_label, labelField.multilingual_label);
+                    } else {
+                        mergeLabelSet(keyword.multilingual_label, labelField);
+                    }
+                }
+
+                if (raw.multilingual_label && typeof raw.multilingual_label === 'object') {
+                    mergeLabelSet(keyword.multilingual_label, raw.multilingual_label);
+                }
+
+                LANG_KEYS.forEach(lang => {
+                    if (raw[lang] && !keyword.multilingual_label[lang]) {
+                        keyword.multilingual_label[lang] = raw[lang];
+                    }
+                });
+            }
+
+            const hasLabel = Object.values(keyword.multilingual_label).some(Boolean);
+            if (!hasLabel) {
+                return null;
+            }
+
+            keyword.isExisting = true;
+            return keyword;
+        }
+
+        function mergeLabelSet(target, source) {
+            if (!source || typeof source !== 'object') return;
+            LANG_KEYS.forEach(lang => {
+                if (source[lang] && !target[lang]) {
+                    target[lang] = source[lang];
+                }
+            });
+        }
+
+        function detectSourceFromUri(uri) {
+            if (!uri) return '';
+            const lowered = uri.toLowerCase();
+            if (lowered.includes('termdat')) return 'TERMDAT';
+            if (lowered.includes('gemet')) return 'GEMET';
+            if (lowered.includes('wikidata')) return 'WIKIDATA';
+            return 'LOCAL';
+        }
+
+        function getLanguageList(kw) {
+            const langs = [];
+            const ml = kw.multilingual_label || {};
+            LANG_KEYS.forEach(lang => {
+                if (ml[lang]) {
+                    langs.push(lang);
+                }
+            });
+            return langs;
+        }
+
+        function prepareNewKeywords(rawKeywords) {
+            if (!Array.isArray(rawKeywords)) {
+                generatedKeywords = [];
+                return;
+            }
+            const deduped = [];
+            const seen = new Set();
+            const existingKeys = new Set(existingKeywords.map(buildKeywordIdentity).filter(Boolean));
+            
+            rawKeywords.forEach(raw => {
+                const identity = buildKeywordIdentity(raw);
+                if (!identity) return;
+                if (existingKeys.has(identity) || seen.has(identity)) return;
+                if (deduped.length >= 10) return;
+                const normalized = { ...raw, isExisting: false };
+                deduped.push(normalized);
+                seen.add(identity);
+            });
+
+            generatedKeywords = deduped;
+            // Add new keywords to combined array
+            combinedKeywords = [...existingKeywords, ...generatedKeywords];
+        }
+
+        function buildKeywordIdentity(kw) {
+            if (!kw) return null;
+            if (kw.uri) return `uri:${kw.uri.toLowerCase()}`;
+            const label = normalizeLabel(extractProposedLabel(kw));
+            return label ? `label:${label}` : null;
+        }
+        
+        document.getElementById('viewJsonBtn').addEventListener('click', function() {
             // Format keywords as they will be sent to API
-            const formattedKeywords = selected.map(kw => ({
-                label: {
-                    de: kw.label_de || '',
-                    en: kw.label_en || '',
-                    fr: kw.label_fr || '',
-                    it: kw.label_it || '',
-                    rm: kw.label_rm || ''
-                },
-                uri: kw.uri || ''
-            }));
+            const formattedKeywords = getCombinedKeywords().map(kw => {
+                const labels = {};
+                // Extract from multilingual_label first, then fall back to label_xx fields
+                const ml = kw.multilingual_label || {};
+                labels.de = ml.de || kw.label_de || '';
+                labels.fr = ml.fr || kw.label_fr || '';
+                labels.it = ml.it || kw.label_it || '';
+                labels.en = ml.en || kw.label_en || '';
+                labels.rm = ml.rm || kw.label_rm || '';
+                
+                return {
+                    label: labels,
+                    uri: kw.uri || ''
+                };
+            });
             
             alert('Formatted Keywords (as will be sent to I14Y):\n\n' + JSON.stringify(formattedKeywords, null, 2));
         });
         
         document.getElementById('proceedToUpdateBtn').addEventListener('click', function() {
-            // Store selected keywords
-            const selected = Array.from(selectedKeywords).map(index => generatedKeywords[index]);
-            sessionStorage.setItem('selectedKeywords', JSON.stringify(selected));
-            // Navigate to step 4
-            window.location.href = '/refine/step4';
+            // Show the modal
+            const modal = document.getElementById('tokenModal');
+            modal.style.display = 'flex';
+            document.getElementById('modalApiToken').focus();
+        });
+        
+        document.getElementById('cancelTokenBtn').addEventListener('click', function() {
+            document.getElementById('tokenModal').style.display = 'none';
+            document.getElementById('modalApiToken').value = '';
+            document.getElementById('modalError').style.display = 'none';
+        });
+        
+        document.getElementById('confirmTokenBtn').addEventListener('click', async function() {
+            const apiToken = document.getElementById('modalApiToken').value.trim();
+            
+            if (!apiToken) {
+                document.getElementById('modalError').textContent = 'Please provide an API token';
+                document.getElementById('modalError').style.display = 'block';
+                return;
+            }
+            
+            if (!apiToken.startsWith('Bearer ')) {
+                document.getElementById('modalError').textContent = 'API token must start with "Bearer "';
+                document.getElementById('modalError').style.display = 'block';
+                return;
+            }
+            
+            document.getElementById('modalLoading').style.display = 'block';
+            document.getElementById('modalError').style.display = 'none';
+            document.getElementById('confirmTokenBtn').disabled = true;
+            
+            try {
+                const selectedItemStr = sessionStorage.getItem('selectedI14YItem');
+                const selectedItem = selectedItemStr ? JSON.parse(selectedItemStr) : null;
+                const currentEnv = sessionStorage.getItem('i14yEnv') || 'prod';
+                
+                if (!selectedItem) {
+                    throw new Error('No item selected');
+                }
+                
+                const payload = {
+                    apiToken,
+                    objectId: selectedItem.id || selectedItem.guid,
+                    objectType: selectedItem.objectType || 'dataset',
+                    keywords: getCombinedKeywords(),
+                    fullDataset: {
+                        fullObject: selectedItem.fullObject || selectedItem,
+                        title: selectedItem.title || (selectedItem.fullObject && selectedItem.fullObject.title) || {},
+                        description: selectedItem.description || (selectedItem.fullObject && selectedItem.fullObject.description) || {},
+                        guid: selectedItem.guid || selectedItem.id,
+                        id: selectedItem.id || selectedItem.guid
+                    },
+                    env: currentEnv
+                };
+
+                const response = await fetch('/update-i14y-keywords', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    // Close modal
+                    document.getElementById('tokenModal').style.display = 'none';
+                    document.getElementById('modalApiToken').value = '';
+                    
+                    // Build I14Y link
+                    const objectId = selectedItem.id || selectedItem.guid;
+                    const objectType = selectedItem.objectType || 'dataset';
+                    const baseUrl = currentEnv === 'prod' ? 'https://input.i14y.admin.ch' : 'https://input-a.i14y.admin.ch';
+                    const i14yLink = `${baseUrl}/catalog/${objectType}s/${objectId}/description?backto=all#section-properties`;
+                    
+                    // Show success message
+                    document.getElementById('success').innerHTML = `
+                        <div style="padding: 24px; background: #ecfdf5; border: 1px solid #059669; border-radius: 6px;">
+                            <h3 style="margin: 0 0 12px 0; color: #059669; font-size: 1.3em;">✓ Keywords Updated Successfully!</h3>
+                            <p style="margin: 0 0 15px 0; color: #064e3b; line-height: 1.6;">
+                                The keywords have been updated on I14Y.
+                            </p>
+                            <div style="margin-bottom: 15px;">
+                                <a href="${i14yLink}" target="_blank" rel="noopener noreferrer" style="color: #059669; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+                                    View updated item on I14Y →
+                                </a>
+                            </div>
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <a href="/refine/step1" class="search-btn" style="text-decoration: none; display: inline-block;">
+                                    Update Another Item
+                                </a>
+                                <a href="/welcome" class="search-btn secondary" style="text-decoration: none; display: inline-block;">
+                                    Back to Home
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('success').style.display = 'block';
+                    
+                    // Clear session storage
+                    sessionStorage.removeItem('selectedI14YItem');
+                    sessionStorage.removeItem('generatedKeywords');
+                    sessionStorage.removeItem('finalKeywords');
+                    
+                    // Scroll to success message
+                    document.getElementById('success').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                } else {
+                    throw new Error(data.error || 'Failed to update keywords');
+                }
+            } catch (error) {
+                document.getElementById('modalError').textContent = 'Error: ' + error.message;
+                document.getElementById('modalError').style.display = 'block';
+            } finally {
+                document.getElementById('modalLoading').style.display = 'none';
+                document.getElementById('confirmTokenBtn').disabled = false;
+            }
         });
         
         function escapeHtml(text) {

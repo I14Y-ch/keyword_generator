@@ -6,6 +6,7 @@
     <title>Current Item Details - Refine Keywords</title>
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+
 </head>
 <body>
     <div class="beta-badge">Beta</div>
@@ -14,8 +15,10 @@
         <div class="header-wrapper">
             <div class="layout-brand">
                 <div class="brand-left">
-                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
-                    <h1 class="header-title">I14Y Tools</h1>
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
                 </div>
             </div>
         </div>
@@ -23,26 +26,42 @@
     
     <main>
         <div class="container">
-            <a href="{{ url_for('refine_step1') }}" class="back-link">Back to Search</a>
-            
             <div class="page-header">
-                <h1>Current Item Details</h1>
+                <h1>Review Item Details</h1>
                 <p class="page-lead">Review current information and keywords</p>
             </div>
-            
-            <div class="step-indicator-bar">
-                <div class="step-progress" style="width: 50%;"></div>
-                <span class="step-text">Step 2 of 4: Review Current</span>
-            </div>
+
+            <ul class="steps-nav">
+                <li class="step-item">
+                    <a href="/refine/step1" class="step-link completed">
+                        <span class="step-number">1</span>
+                        <span>Search I14Y</span>
+                    </a>
+                </li>
+                <li class="step-arrow">→</li>
+                <li class="step-item">
+                    <span class="step-link active">
+                        <span class="step-number">2</span>
+                        <span>Review Item</span>
+                    </span>
+                </li>
+                <li class="step-arrow">→</li>
+                <li class="step-item">
+                    <span class="step-link disabled">
+                        <span class="step-number">3</span>
+                        <span>Arrange & Update</span>
+                    </span>
+                </li>
+            </ul>
             
             <div class="workflow-section">
-                <h2 class="section-title">📋 Item Information</h2>
+                <h2 class="section-title">Item Information</h2>
                 
                 <div id="selectedItemDetails"></div>
                 
                 <div id="currentKeywordsSection" style="margin-top: 30px;">
-                    <h3 style="color: #2c3e50; margin-bottom: 15px;">Current Keywords:</h3>
-                    <div id="currentKeywordsList"></div>
+                    <h3 style="color: #2c3e50; margin-bottom: 15px;">Current Keywords</h3>
+                    <div id="currentKeywordsList" class="keyword-grid"></div>
                 </div>
                 
                 <div style="margin-top: 30px; display: flex; gap: 15px;">
@@ -80,9 +99,15 @@
 
     <script>
         let selectedItem = null;
+        let currentEnv = 'prod';
         
         // Load selected item from sessionStorage
         window.addEventListener('DOMContentLoaded', function() {
+            const savedEnv = sessionStorage.getItem('i14yEnv');
+            if (savedEnv === 'prod' || savedEnv === 'abnahme') {
+                currentEnv = savedEnv;
+            }
+
             const storedItem = sessionStorage.getItem('selectedI14YItem');
             if (!storedItem) {
                 window.location.href = '/refine/step1';
@@ -90,8 +115,46 @@
             }
             
             selectedItem = JSON.parse(storedItem);
-            displayItemDetails();
+            loadFullObject();
         });
+
+        async function loadFullObject() {
+            const loadingEl = document.getElementById('loading');
+            loadingEl.style.display = 'block';
+
+            try {
+                const objectId = selectedItem.id || selectedItem.guid;
+                if (!objectId) {
+                    displayItemDetails();
+                    return;
+                }
+
+                const response = await fetch('/get-i14y-object', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        objectId,
+                        objectType: selectedItem.objectType || 'dataset',
+                        env: currentEnv
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok && data.fullObject) {
+                    selectedItem.fullObject = data.fullObject;
+                    sessionStorage.setItem('selectedI14YItem', JSON.stringify(selectedItem));
+                } else if (data.error) {
+                    document.getElementById('error').textContent = 'Error loading item: ' + data.error;
+                    document.getElementById('error').style.display = 'block';
+                }
+            } catch (error) {
+                document.getElementById('error').textContent = 'Error loading item details: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+            } finally {
+                displayItemDetails();
+                loadingEl.style.display = 'none';
+            }
+        }
         
         function displayItemDetails() {
             const detailsContainer = document.getElementById('selectedItemDetails');
@@ -100,17 +163,43 @@
             const description = selectedItem.description || 'No description available';
             const objectType = selectedItem.objectType || 'dataset';
             const id = selectedItem.id || selectedItem.guid || 'Unknown';
+            const identifier = selectedItem.identifier || (selectedItem.fullObject && selectedItem.fullObject.identifier) || id;
+            const publisher = getPublisher(selectedItem) || 'Unknown';
+            const status = getStatus(selectedItem) || 'Unknown';
+            const publicationLevel = selectedItem.publicationLevel || (selectedItem.fullObject && selectedItem.fullObject.publicationLevel) || '';
+            
+            // Construct public I14Y URL using just the identifier
+            const publicI14yUrl = `https://www.i14y.admin.ch/de/catalog/datasets/${encodeURIComponent(identifier)}`;
             
             detailsContainer.innerHTML = `
-                <div style="background: #f8fafc; padding: 20px; border-radius: 8px; border-left: 4px solid #3182ce;">
-                    <h3 style="margin: 0 0 15px 0; color: #2c3e50;">${escapeHtml(title)}</h3>
-                    <div style="margin-bottom: 15px;">
-                        <span style="background: #e8f4fd; color: #1e40af; padding: 5px 12px; border-radius: 12px; font-size: 0.85em; font-weight: 600; margin-right: 10px;">
-                            ${escapeHtml(objectType)}
-                        </span>
-                        <span style="color: #666; font-size: 0.85em; font-family: monospace;">ID: ${escapeHtml(id)}</span>
+                <div style="background: white; padding: 24px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="margin: 0 0 8px 0; color: #1f2937; font-size: 1.5em; font-weight: 600;">${escapeHtml(title)}</h3>
+                        <div style="color: #6b7280; font-size: 0.9em; margin-bottom: 8px;">
+                            <span>${escapeHtml(objectType)}</span>
+                            <span style="margin: 0 8px;">•</span>
+                            <span>ID: ${escapeHtml(identifier)}</span>
+                            <span style="margin: 0 8px;">•</span>
+                            <a href="${publicI14yUrl}" target="_blank" style="color: #2563eb; text-decoration: none;">View on I14Y ↗</a>
+                        </div>
                     </div>
-                    <p style="margin: 15px 0 0 0; color: #4a5568; line-height: 1.6;">${escapeHtml(description)}</p>
+                    <div style="margin-bottom: 16px;">
+                        <div style="color: #374151; line-height: 1.6;">${escapeHtml(description)}</div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
+                        <div>
+                            <div style="font-size: 0.85em; color: #6b7280; margin-bottom: 4px;">Publisher</div>
+                            <div style="font-weight: 500; color: #1f2937;">${escapeHtml(publisher)}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 0.85em; color: #6b7280; margin-bottom: 4px;">Status</div>
+                            <div style="font-weight: 500; color: #1f2937;">${escapeHtml(status)}</div>
+                        </div>
+                        ${publicationLevel ? `<div>
+                            <div style="font-size: 0.85em; color: #6b7280; margin-bottom: 4px;">Publication Level</div>
+                            <div style="font-weight: 500; color: #1f2937;">${escapeHtml(publicationLevel)}</div>
+                        </div>` : ''}
+                    </div>
                 </div>
             `;
             
@@ -148,29 +237,77 @@
             
             const keywordsHtml = keywords.map(kw => {
                 let label = '';
-                let uri = kw.uri || '';
+                let uri = '';
+                const langs = [];
+                const langKeys = ['de','fr','it','en','rm'];
+                let sourceTag = '';
                 
-                if (kw.label && typeof kw.label === 'object') {
-                    if (kw.label.multilingual_label) {
-                        label = kw.label.multilingual_label.de || 
-                                kw.label.multilingual_label.fr || 
-                                kw.label.multilingual_label.en || 
-                                kw.label.multilingual_label.it || 
-                                Object.values(kw.label.multilingual_label)[0] || 
-                                'Unknown';
-                    } else {
-                        label = kw.label.de || kw.label.fr || kw.label.en || kw.label.it || 'Unknown';
+                // Handle different keyword structures from I14Y API
+                if (typeof kw === 'string') {
+                    // Keyword is just a string
+                    label = kw;
+                } else if (kw && typeof kw === 'object') {
+                    // Get URI
+                    uri = kw.uri || '';
+                    
+                    // Determine source from URI
+                    if (uri) {
+                        const uriLower = uri.toLowerCase();
+                        if (uriLower.includes('termdat')) sourceTag = 'TERMDAT';
+                        else if (uriLower.includes('gemet')) sourceTag = 'GEMET';
+                        else if (uriLower.includes('wikidata')) sourceTag = 'Wikidata';
+                        else sourceTag = 'Link';
                     }
-                } else if (typeof kw.label === 'string') {
-                    label = kw.label;
-                } else {
-                    label = 'Unknown';
+                    
+                    // Extract label from various possible structures
+                    if (kw.label) {
+                        if (typeof kw.label === 'string') {
+                            label = kw.label;
+                        } else if (typeof kw.label === 'object') {
+                            // Check for nested multilingual_label first
+                            if (kw.label.multilingual_label && typeof kw.label.multilingual_label === 'object') {
+                                const ml = kw.label.multilingual_label;
+                                langKeys.forEach(l => { if (ml[l]) langs.push(l); });
+                                label = ml.de || ml.fr || ml.en || ml.it || ml.rm || Object.values(ml)[0] || '';
+                            } else {
+                                // Direct language keys in label object
+                                langKeys.forEach(l => { if (kw.label[l]) langs.push(l); });
+                                label = kw.label.de || kw.label.fr || kw.label.en || kw.label.it || kw.label.rm || Object.values(kw.label)[0] || '';
+                            }
+                        }
+                    }
+                    
+                    // If no label found, try multilingual_label at top level
+                    if (!label && kw.multilingual_label && typeof kw.multilingual_label === 'object') {
+                        langKeys.forEach(l => { if (kw.multilingual_label[l]) langs.push(l); });
+                        label = kw.multilingual_label.de || kw.multilingual_label.fr || 
+                               kw.multilingual_label.en || kw.multilingual_label.it || 
+                               kw.multilingual_label.rm || Object.values(kw.multilingual_label)[0] || '';
+                    }
+                    
+                    // Fallback: try direct language properties
+                    if (!label) {
+                        langKeys.forEach(l => { if (kw[l]) langs.push(l); });
+                        label = kw.de || kw.fr || kw.en || kw.it || kw.rm || '';
+                    }
                 }
                 
+                if (!label) label = 'Unknown';
+                
+                const langInfo = langs.length ? `Languages: ${langs.join(', ')}` : 'Languages: n/a';
+                
+                const sourceColor = sourceTag === 'TERMDAT' ? '#059669' :
+                                   sourceTag === 'GEMET' ? '#7c3aed' :
+                                   sourceTag === 'Wikidata' ? '#2563eb' : '#64748b';
+                
                 return `
-                    <div class="keyword-display-card" style="margin-bottom: 10px; padding: 12px; background: white; border: 1px solid #e2e8f0; border-radius: 6px;">
-                        <div style="font-weight: 600; color: #2c3e50; margin-bottom: 5px;">${escapeHtml(label)}</div>
-                        ${uri ? `<div style="font-size: 0.85em; color: #666; font-family: monospace;">${escapeHtml(uri)}</div>` : ''}
+                    <div class="keyword-card">
+                        <div class="keyword-title">${escapeHtml(label)}</div>
+                        <div style="font-size: 0.85em; color: #666; margin-top: 4px;">
+                            ${uri ? `Source: <span style="color: ${sourceColor}; font-weight: 600;">${escapeHtml(sourceTag)}</span>` : 'Source: <span style="color: #888; font-weight: 600;">LOCAL</span>'}
+                        </div>
+                        <div style="font-size: 0.85em; color: #888; margin-top: 4px;">${escapeHtml(langInfo)}</div>
+                        ${uri ? `<div class="keyword-uri" style="margin-top: 4px;"><a href="${escapeHtml(uri)}" target="_blank" rel="noopener noreferrer">${escapeHtml(uri)}</a></div>` : ''}
                     </div>
                 `;
             }).join('');
@@ -179,43 +316,83 @@
         }
         
         document.getElementById('generateNewBtn').addEventListener('click', async function() {
-            document.getElementById('loading').style.display = 'block';
+            const description = selectedItem.description || selectedItem.title || '';
             
-            try {
-                const description = selectedItem.description || selectedItem.title || '';
-                
-                // Call backend to generate keywords
-                const response = await fetch('/search', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        query: description,
-                        include_synonyms: true
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.keywords) {
-                    // Store generated keywords in sessionStorage
-                    sessionStorage.setItem('generatedKeywords', JSON.stringify(data.keywords));
-                    // Navigate to step 3
-                    window.location.href = '/refine/step3';
-                } else {
-                    throw new Error('No keywords generated');
-                }
-            } catch (error) {
-                document.getElementById('error').textContent = 'Error generating keywords: ' + error.message;
+            if (!description) {
+                document.getElementById('error').textContent = 'No description available to generate keywords';
                 document.getElementById('error').style.display = 'block';
-            } finally {
-                document.getElementById('loading').style.display = 'none';
+                return;
             }
+            
+            // Store the description and navigate to step 3 immediately
+            sessionStorage.setItem('keywordQuery', description);
+            window.location.href = '/refine/step3';
         });
         
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function extractTextField(field, preferredLangOrder) {
+            if (!field) return '';
+            if (typeof field === 'string') return field;
+            if (typeof field === 'object') {
+                const langs = preferredLangOrder || ['en', 'de', 'fr', 'it'];
+                for (const lang of langs) {
+                    if (field[lang]) return field[lang];
+                }
+                const vals = Object.values(field);
+                if (vals.length) return vals[0];
+            }
+            return '';
+        }
+
+        function getPreferredLangOrder() {
+            const browserLang = (navigator.language || '').toLowerCase().split('-')[0];
+            const langs = ['en', 'de', 'fr', 'it'];
+            const ordered = [];
+            if (langs.includes(browserLang)) ordered.push(browserLang);
+            ordered.push('en', 'de', 'fr', 'it');
+            return Array.from(new Set(ordered));
+        }
+
+        function getPublisher(item) {
+            const order = getPreferredLangOrder();
+            // Handle nested publisher.name structure
+            let publisherField = item.publisher || (item.fullObject && item.fullObject.publisher);
+            if (publisherField && typeof publisherField === 'object' && publisherField.name) {
+                return extractTextField(publisherField.name, order);
+            }
+            // Fallback to direct extraction
+            let publisher = extractTextField(publisherField, order);
+            if (!publisher && item.fullObject) {
+                let orgField = item.fullObject.organisation;
+                if (orgField && typeof orgField === 'object' && orgField.name) {
+                    return extractTextField(orgField.name, order);
+                }
+                publisher = extractTextField(orgField, order);
+            }
+            return publisher;
+        }
+
+        function getStatus(item) {
+            const candidates = [
+                item.registrationStatus,
+                item.fullObject && item.fullObject.registrationStatus,
+                item.status,
+                item.fullObject && item.fullObject.status,
+                item.fullObject && item.fullObject.lifeCycleStatus,
+                item.fullObject && item.fullObject.lifecycleStatus,
+                item.fullObject && item.fullObject.state,
+                item.fullObject && item.fullObject.statusText
+            ];
+            for (const cand of candidates) {
+                const val = extractTextField(cand);
+                if (val) return val;
+            }
+            return '';
         }
     </script>
 </body>

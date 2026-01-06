@@ -14,8 +14,10 @@
         <div class="header-wrapper">
             <div class="layout-brand">
                 <div class="brand-left">
-                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
-                    <h1 class="header-title">I14Y Tools</h1>
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
                 </div>
             </div>
         </div>
@@ -23,7 +25,7 @@
     
     <main>
         <div class="container">
-            <a href="{{ url_for('refine_step3') }}" class="back-link">Back to Review</a>
+            <a href="{{ url_for('refine_step3') }}" class="back-link">Back to Arrangement</a>
             
             <div class="page-header">
                 <h1>Update Keywords on I14Y</h1>
@@ -68,7 +70,7 @@
                 </div>
                 
                 <div id="keywordPreview" style="margin-bottom: 20px;">
-                    <h4 style="color: #2c3e50; margin-bottom: 10px;">Keywords to be added:</h4>
+                    <h4 style="color: #2c3e50; margin-bottom: 10px;">Keywords to be stored on I14Y:</h4>
                     <div id="keywordPreviewList"></div>
                 </div>
                 
@@ -108,19 +110,32 @@
 
     <script>
         let selectedItem = null;
-        let selectedKeywords = [];
+        let finalKeywords = [];
+        let currentEnv = 'prod';
         
         window.addEventListener('DOMContentLoaded', function() {
             const storedItem = sessionStorage.getItem('selectedI14YItem');
-            const storedKeywords = sessionStorage.getItem('selectedKeywords');
+            const storedFinal = sessionStorage.getItem('finalKeywords');
+            const storedSelected = sessionStorage.getItem('selectedKeywords');
+            const savedEnv = sessionStorage.getItem('i14yEnv');
+            if (savedEnv === 'prod' || savedEnv === 'abnahme') {
+                currentEnv = savedEnv;
+            }
             
-            if (!storedItem || !storedKeywords) {
+            if (!storedItem) {
                 window.location.href = '/refine/step1';
                 return;
             }
-            
             selectedItem = JSON.parse(storedItem);
-            selectedKeywords = JSON.parse(storedKeywords);
+            if (storedFinal) {
+                finalKeywords = JSON.parse(storedFinal);
+            } else if (storedSelected) {
+                finalKeywords = JSON.parse(storedSelected);
+            }
+            if (!finalKeywords || finalKeywords.length === 0) {
+                window.location.href = '/refine/step3';
+                return;
+            }
             
             displaySummary();
             displayKeywordPreview();
@@ -130,24 +145,32 @@
             document.getElementById('summaryObjectTitle').textContent = selectedItem.title || 'Untitled';
             document.getElementById('summaryObjectType').textContent = selectedItem.objectType || 'dataset';
             document.getElementById('summaryObjectId').textContent = selectedItem.id || selectedItem.guid || 'Unknown';
-            document.getElementById('summaryKeywordCount').textContent = selectedKeywords.length;
+            const existingCount = finalKeywords.filter(kw => kw.isExisting).length;
+            const newCount = finalKeywords.length - existingCount;
+            document.getElementById('summaryKeywordCount').textContent = `${finalKeywords.length} total (existing: ${existingCount}, new: ${newCount})`;
         }
         
         function displayKeywordPreview() {
             const previewContainer = document.getElementById('keywordPreviewList');
-            
-            const keywordsHtml = selectedKeywords.map(kw => {
-                const label = kw.label_de || kw.label || 'Unknown';
+            const keywordsHtml = finalKeywords.map(kw => {
+                const label = extractLabel(kw);
                 const uri = kw.uri || '';
-                
+                const isExisting = !!kw.isExisting;
+                const cardBg = isExisting ? '#f1f5f9' : '#ecfdf5';
+                const borderColor = isExisting ? '#94a3b8' : '#059669';
+                const badgeBg = isExisting ? '#e2e8f0' : '#d1fae5';
+                const badgeColor = isExisting ? '#475569' : '#047857';
+                const badgeLabel = isExisting ? 'Existing' : 'New';
                 return `
-                    <div style="margin-bottom: 8px; padding: 10px; background: #ecfdf5; border: 1px solid #059669; border-radius: 6px;">
-                        <div style="font-weight: 600; color: #2c3e50; margin-bottom: 3px;">${escapeHtml(label)}</div>
-                        ${uri ? `<div style="font-size: 0.85em; color: #666; font-family: monospace; word-break: break-all;">${escapeHtml(uri)}</div>` : ''}
+                    <div style="margin-bottom: 8px; padding: 10px; background: ${cardBg}; border: 1px solid ${borderColor}; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+                            <div style="font-weight: 600; color: #2c3e50;">${escapeHtml(label)}</div>
+                            <span style="font-size: 0.75em; background: ${badgeBg}; color: ${badgeColor}; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; font-weight: 700;">${badgeLabel}</span>
+                        </div>
+                        ${uri ? `<div style="font-size: 0.85em; color: #666; font-family: monospace; word-break: break-all; margin-top: 4px;">${escapeHtml(uri)}</div>` : ''}
                     </div>
                 `;
             }).join('');
-            
             previewContainer.innerHTML = keywordsHtml;
         }
         
@@ -171,16 +194,19 @@
             document.getElementById('success').style.display = 'none';
             
             try {
+                const payload = {
+                    apiToken,
+                    objectId: selectedItem.id || selectedItem.guid,
+                    objectType: selectedItem.objectType || 'dataset',
+                    keywords: finalKeywords,
+                    fullDataset: buildFullDatasetPayload(),
+                    env: currentEnv
+                };
+
                 const response = await fetch('/update-i14y-keywords', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        api_token: apiToken,
-                        object_id: selectedItem.id || selectedItem.guid,
-                        object_type: selectedItem.objectType || 'dataset',
-                        keywords: selectedKeywords,
-                        full_object: selectedItem.fullObject || selectedItem
-                    })
+                    body: JSON.stringify(payload)
                 });
                 
                 const data = await response.json();
@@ -203,14 +229,11 @@
                         </div>
                     `;
                     document.getElementById('success').style.display = 'block';
-                    
-                    // Clear the token
                     document.getElementById('apiToken').value = '';
-                    
-                    // Clear session storage
                     sessionStorage.removeItem('selectedI14YItem');
                     sessionStorage.removeItem('generatedKeywords');
                     sessionStorage.removeItem('selectedKeywords');
+                    sessionStorage.removeItem('finalKeywords');
                 } else {
                     throw new Error(data.error || 'Failed to update keywords');
                 }
@@ -221,11 +244,36 @@
                 document.getElementById('loading').style.display = 'none';
             }
         });
+
+        function buildFullDatasetPayload() {
+            return {
+                fullObject: selectedItem.fullObject || selectedItem,
+                title: selectedItem.title || (selectedItem.fullObject && selectedItem.fullObject.title) || {},
+                description: selectedItem.description || (selectedItem.fullObject && selectedItem.fullObject.description) || {},
+                guid: selectedItem.guid || selectedItem.id,
+                id: selectedItem.id || selectedItem.guid
+            };
+        }
         
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+        
+        function extractLabel(kw) {
+            if (kw.label && typeof kw.label === 'object') {
+                return kw.label.de || kw.label.fr || kw.label.en || kw.label.it || kw.label.rm || Object.values(kw.label)[0] || 'Unknown';
+            }
+            if (kw.multilingual_label && typeof kw.multilingual_label === 'object') {
+                const ml = kw.multilingual_label;
+                return ml.de || ml.fr || ml.en || ml.it || ml.rm || Object.values(ml)[0] || 'Unknown';
+            }
+            if (kw.label_de || kw.label_fr || kw.label_en || kw.label_it || kw.label_rm) {
+                return kw.label_de || kw.label_fr || kw.label_en || kw.label_it || kw.label_rm || 'Unknown';
+            }
+            if (typeof kw.label === 'string') return kw.label;
+            return 'Unknown';
         }
     </script>
 </body>

@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_caching import Cache
 import requests
 import json
@@ -42,6 +42,157 @@ class KeywordGenerator:
         adapter = HTTPAdapter(max_retries=retries)
         self.session.mount('https://', adapter)
         self.session.mount('http://', adapter)
+        
+        # OpenAI API key for keyword extraction (optional)
+        self.openai_api_key = os.environ.get('OPENAI_API_KEY')
+
+    def _extract_keywords_from_text(self, text, max_keywords=5):
+        """Extract relevant keywords from a longer text description.
+        Uses OpenAI if available, otherwise falls back to simple NLP techniques.
+        
+        Args:
+            text: The input text (could be single word or multiple sentences)
+            max_keywords: Maximum number of keywords to extract
+            
+        Returns:
+            list: List of extracted keywords
+        """
+        # If text is short (likely a single keyword), return it as-is
+        if len(text.split()) <= 3:
+            return [text.strip()]
+        
+        logging.info(f"Extracting keywords from text: '{text[:100]}...'")
+        
+        # Try OpenAI first if API key is available
+        if self.openai_api_key:
+            try:
+                keywords = self._extract_keywords_with_openai(text, max_keywords)
+                if keywords:
+                    logging.info(f"Extracted keywords via OpenAI: {keywords}")
+                    return keywords
+            except Exception as e:
+                logging.warning(f"OpenAI keyword extraction failed: {e}, falling back to NLP")
+        
+        # Fallback to simple NLP-based extraction
+        keywords = self._extract_keywords_with_nlp(text, max_keywords)
+        logging.info(f"Extracted keywords via NLP: {keywords}")
+        return keywords
+    
+    def _extract_keywords_with_openai(self, text, max_keywords=5):
+        """Extract keywords using OpenAI GPT model"""
+        try:
+            import openai
+            openai.api_key = self.openai_api_key
+            
+            prompt = f"""Extract the {max_keywords} most important keywords or key phrases from the following text. 
+The keywords should be relevant for searching in controlled vocabularies like TERMDAT, GEMET, or Wikidata.
+Return ONLY the keywords, one per line, without numbering or explanation.
+Focus on domain-specific terms, concepts, and important nouns.
+
+Text: {text}
+
+Keywords:"""
+            
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are a keyword extraction expert for Swiss government data catalogs."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=200
+            )
+            
+            content = response.choices[0].message.content.strip()
+            keywords = [kw.strip() for kw in content.split('\n') if kw.strip()]
+            
+            # Filter out very short keywords and limit to max_keywords
+            keywords = [kw for kw in keywords if len(kw) > 2][:max_keywords]
+            
+            return keywords if keywords else None
+            
+        except ImportError:
+            logging.info("OpenAI library not installed")
+            return None
+        except Exception as e:
+            logging.error(f"OpenAI API error: {e}")
+            return None
+    
+    def _extract_keywords_with_nlp(self, text, max_keywords=5):
+        """Extract keywords using simple NLP techniques (frequency analysis, stopwords, etc.)"""
+        # German stopwords (common words to ignore)
+        german_stopwords = {
+            'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer', 'eines', 'einem', 'einen',
+            'und', 'oder', 'aber', 'als', 'bei', 'bis', 'durch', 'für', 'gegen', 'in', 'mit', 'nach',
+            'über', 'um', 'von', 'vor', 'zu', 'zum', 'zur', 'im', 'am', 'an', 'auf', 'aus', 'bei',
+            'ist', 'sind', 'war', 'waren', 'wird', 'werden', 'wurde', 'wurden', 'hat', 'haben',
+            'nicht', 'nur', 'noch', 'auch', 'wenn', 'wie', 'was', 'wo', 'wer', 'alle', 'diese',
+            'dieser', 'dieses', 'jede', 'jeder', 'jedes', 'sein', 'seine', 'ihr', 'ihre',
+            'sich', 'sie', 'er', 'es', 'wir', 'uns', 'euch', 'ihnen', 'mein', 'dein',
+            'kann', 'könnte', 'muss', 'sollte', 'möchte', 'soll', 'sehr', 'mehr', 'viel'
+        }
+        
+        # Clean and tokenize text
+        text_lower = text.lower()
+        # Remove punctuation and split into words
+        words = re.findall(r'\b[a-zäöüß]+\b', text_lower)
+        
+        # Filter out stopwords and short words
+        meaningful_words = [
+            word for word in words 
+            if word not in german_stopwords and len(word) > 3
+        ]
+        
+        # Count word frequencies
+        from collections import Counter
+        word_freq = Counter(meaningful_words)
+        
+        # Get most common words
+        top_words = [word for word, count in word_freq.most_common(max_keywords * 2)]
+        
+        # Also look for multi-word phrases (bigrams, trigrams)
+        phrases = self._extract_phrases(text, german_stopwords)
+        
+        # Combine single words and phrases, prioritize phrases
+        keywords = phrases[:max_keywords // 2] + top_words[:max_keywords]
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_keywords = []
+        for kw in keywords:
+            if kw.lower() not in seen:
+                seen.add(kw.lower())
+                unique_keywords.append(kw)
+        
+        return unique_keywords[:max_keywords]
+    
+    def _extract_phrases(self, text, stopwords):
+        """Extract meaningful multi-word phrases from text"""
+        phrases = []
+        
+        # Split into sentences
+        sentences = re.split(r'[.!?]+', text)
+        
+        for sentence in sentences:
+            # Look for capitalized phrases (likely proper nouns or important concepts)
+            capitalized = re.findall(r'\b[A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)+\b', sentence)
+            phrases.extend(capitalized)
+            
+            # Look for quoted phrases
+            quoted = re.findall(r'"([^"]+)"', sentence)
+            phrases.extend(quoted)
+        
+        # Filter out very long phrases and those with stopwords
+        filtered_phrases = []
+        for phrase in phrases:
+            words = phrase.lower().split()
+            if 2 <= len(words) <= 4:  # 2-4 word phrases
+                # Check if not mostly stopwords
+                meaningful = [w for w in words if w not in stopwords and len(w) > 2]
+                if len(meaningful) >= len(words) / 2:
+                    filtered_phrases.append(phrase)
+        
+        return filtered_phrases[:5]  # Return top 5 phrases
 
     def _discover_synonyms_from_wikidata(self, query, limit=3):
         """Discover synonyms and related terms using Wikidata's linked data relationships"""
@@ -494,6 +645,12 @@ class KeywordGenerator:
 
                                 entry_id = entry.get('id')
                                 if not entry_id or entry_id in processed_entry_ids:
+                                    continue
+
+                                # Only include validated entries (status == 1)
+                                entry_status = entry.get('status')
+                                if entry_status != 1 and entry_status != "1":
+                                    logging.debug(f"Skipping TERMDAT entry {entry_id} - not validated (status: {entry_status})")
                                     continue
 
                                 processed_entry_ids.add(entry_id)
@@ -1036,71 +1193,108 @@ class KeywordGenerator:
         return multilingual_terms if multilingual_terms else None
     
     def _convert_to_i14y_format(self, keywords):
-        """Convert multilingual keywords to I14Y expected format"""
+        """Convert multilingual keywords to I14Y format (new schema with label + uri).
+        Returns a list like:
+        [{"label": {"de": "..", "en": ".."}, "uri": "..."}, ...]
+        Falls back to legacy language keys if labels are missing.
+        """
         i14y_keywords = []
         
         for keyword in keywords:
+            labels = {}
+            uri = keyword.get('uri') or keyword.get('_uri', '')
+            
             if 'multilingual_label' in keyword:
                 multilingual_labels = keyword['multilingual_label']
-                
-                # Create I14Y keyword object with all available languages
-                i14y_keyword = {}
-                
-                # Add available language variants
-                for lang_code in ['de', 'fr', 'it', 'en']:
-                    if lang_code in multilingual_labels:
-                        i14y_keyword[lang_code] = multilingual_labels[lang_code]
-                
-                # Only add if we have at least one language
-                if i14y_keyword:
-                    # Add metadata
-                    i14y_keyword['_source'] = keyword.get('source', '')
-                    i14y_keyword['_uri'] = keyword.get('uri', '')
-                    i14y_keyword['_description'] = keyword.get('description', '')
-                    i14y_keywords.append(i14y_keyword)
+                for lang_code in ['de', 'fr', 'it', 'en', 'rm']:
+                    if multilingual_labels.get(lang_code):
+                        labels[lang_code] = multilingual_labels[lang_code]
             else:
                 # Fallback for old format (single label)
                 label = keyword.get('label', '')
                 if label:
-                    i14y_keyword = {
-                        'de': label,  # Default to German if language not specified
-                        '_source': keyword.get('source', ''),
-                        '_uri': keyword.get('uri', ''),
-                        '_description': keyword.get('description', '')
-                    }
-                    i14y_keywords.append(i14y_keyword)
+                    labels['de'] = label
+            
+            if labels:
+                i14y_keywords.append({
+                    'label': labels,
+                    'uri': uri
+                })
         
         return i14y_keywords
 
     def generate_keywords(self, query, query_lang='de', include_synonyms=True):
-        """Generate keywords following DCAT-AP CH priority cascade with exact match prioritization and synonym support"""
+        """Generate keywords following DCAT-AP CH priority cascade with exact match prioritization and synonym support.
+        Supports both single keyword queries and multi-sentence descriptions.
+        
+        Args:
+            query: Single keyword or longer description text
+            query_lang: Language code (de, fr, it, en)
+            include_synonyms: Whether to include synonym expansion
+            
+        Returns:
+            list: List of keyword dictionaries with metadata
+        """
         all_keywords = []
         
-        logging.info(f"Starting keyword generation for: '{query}' in language: {query_lang}")
-        if include_synonyms:
-            synonyms = self._get_synonym_queries(query)
-            logging.info(f"Including synonyms: {synonyms}")
+        logging.info(f"Starting keyword generation for: '{query[:100]}...' in language: {query_lang}")
         
-        # Priority 1: TERMDAT (multilingual) - with synonym support
-        termdat_results = self.search_termdat(query, query_lang, include_synonyms)
-        all_keywords.extend(termdat_results)
+        # Step 1: Extract keywords from the input text
+        # If it's a short query (1-3 words), treat as single keyword
+        # If it's longer, extract multiple keywords
+        extracted_keywords = self._extract_keywords_from_text(query, max_keywords=5)
+        logging.info(f"Extracted keywords: {extracted_keywords}")
         
-        # Priority 2: GEMET (multilingual) - TODO: add synonym support
-        gemet_results = self.search_gemet(query)
-        all_keywords.extend(gemet_results)
+        # Step 2: Search for each extracted keyword in vocabularies
+        for keyword in extracted_keywords:
+            logging.info(f"Searching vocabularies for keyword: '{keyword}'")
+            
+            # Add synonym support if enabled
+            if include_synonyms:
+                synonyms = self._get_synonym_queries(keyword)
+                logging.info(f"Including synonyms for '{keyword}': {synonyms}")
+            
+            # Priority 1: TERMDAT (multilingual) - with synonym support
+            termdat_results = self.search_termdat(keyword, query_lang, include_synonyms)
+            for result in termdat_results:
+                result['extracted_from'] = query if len(query.split()) > 3 else None
+                result['search_keyword'] = keyword
+            all_keywords.extend(termdat_results)
+            
+            # Priority 2: GEMET (multilingual)
+            gemet_results = self.search_gemet(keyword)
+            for result in gemet_results:
+                result['extracted_from'] = query if len(query.split()) > 3 else None
+                result['search_keyword'] = keyword
+            all_keywords.extend(gemet_results)
+            
+            # Priority 3: Wikidata (multilingual)
+            wikidata_results = self.search_wikidata(keyword)
+            for result in wikidata_results:
+                result['extracted_from'] = query if len(query.split()) > 3 else None
+                result['search_keyword'] = keyword
+            all_keywords.extend(wikidata_results)
         
-        # Priority 3: Wikidata (multilingual) - TODO: add synonym support
-        wikidata_results = self.search_wikidata(query)
-        all_keywords.extend(wikidata_results)
+        # Remove duplicates (same URI)
+        seen_uris = set()
+        unique_keywords = []
+        for kw in all_keywords:
+            uri = kw.get('uri', '')
+            if uri and uri not in seen_uris:
+                seen_uris.add(uri)
+                unique_keywords.append(kw)
+            elif not uri:  # Keep keywords without URIs (literals)
+                unique_keywords.append(kw)
         
         # Sort all results: exact matches first, then by synonym priority, then by source priority
         def sort_key(result):
-            query_lower = query.lower()
+            # Check against all extracted keywords for exact match
             multilingual_terms = result.get('multilingual_label', {})
+            search_keyword = result.get('search_keyword', query).lower()
             
             # Check for exact match in any language
             has_exact_match = any(
-                term.lower() == query_lower 
+                term.lower() == search_keyword
                 for term in multilingual_terms.values()
             )
             
@@ -1118,10 +1312,6 @@ class KeywordGenerator:
             source_rank = source_priority.get(source, 999)
             
             # Return tuple: (exact_match_priority, synonym_priority, source_priority, negative_language_count)
-            # exact_match_priority: 0 for exact matches (highest priority), 1 for others
-            # synonym_priority: 0 for original query results, 1 for synonym results
-            # source_priority: 0 for TERMDAT (highest), 1 for GEMET, 2 for Wikidata
-            # negative_language_count: more languages = higher priority
             return (
                 0 if has_exact_match else 1,
                 1 if is_synonym_result else 0,
@@ -1129,34 +1319,327 @@ class KeywordGenerator:
                 -len(result.get('available_languages', []))
             )
         
-        all_keywords.sort(key=sort_key)
+        unique_keywords.sort(key=sort_key)
         
-        # Limit final results to 10
-        return all_keywords[:10]
+        # Limit final results to 15 (increased from 10 to accommodate multiple extracted keywords)
+        return unique_keywords[:15]
+    
+    def generate_keywords_progressive(self, i14y_item, query_lang='de'):
+        """Generate keywords using improved progressive algorithm for workflow 1.
+        
+        Algorithm:
+        1. If keywords exist in I14Y, query TERMDAT→GEMET→Wikidata for exact matches
+        2. If < 8 matches, extract keywords with NLP and query vocabularies
+        3. If still < 8 matches, use OpenAI to extract keywords and query vocabularies
+        4. Stop when we have 8 keywords AND at least 3 different ones
+        
+        Args:
+            i14y_item: Full I14Y item object with metadata
+            query_lang: Language code (de, fr, it, en)
+            
+        Returns:
+            list: List of keyword dictionaries with metadata
+        """
+        all_keywords = []
+        seen_uris = set()
+        seen_labels = set()
+        existing_lang_keys = ['de', 'fr', 'it', 'en', 'rm']
+        
+        def add_unique_keywords(new_keywords):
+            """Add keywords to collection, avoiding duplicates"""
+            for kw in new_keywords:
+                uri = kw.get('uri', '')
+                # Get a normalized label for deduplication
+                labels = kw.get('multilingual_label', {})
+                label_key = tuple(sorted(labels.values())) if labels else str(kw)
+                
+                if uri and uri not in seen_uris:
+                    seen_uris.add(uri)
+                    seen_labels.add(label_key)
+                    all_keywords.append(kw)
+                elif not uri and label_key not in seen_labels:
+                    seen_labels.add(label_key)
+                    all_keywords.append(kw)
+        
+        def count_unique_labels():
+            """Count truly unique keywords (different labels)"""
+            unique = set()
+            for kw in all_keywords:
+                labels = kw.get('multilingual_label', {})
+                if labels:
+                    # Use the German label primarily, or first available
+                    primary_label = labels.get('de') or labels.get('en') or labels.get('fr') or next(iter(labels.values()), '')
+                    if primary_label:
+                        unique.add(primary_label.lower())
+            return len(unique)
+        
+        def should_stop():
+            """Check if we should stop generating keywords"""
+            return len(all_keywords) >= 15 and count_unique_labels() >= 5
+
+        def extract_label_candidates(keyword_obj):
+            """Return list of (label, lang) tuples for an I14Y keyword entry"""
+            candidates = []
+
+            def add_candidate(text, lang=None):
+                if not text:
+                    return
+                normalized = str(text).strip()
+                if normalized:
+                    candidates.append((normalized, (lang or '').lower() or None))
+
+            if isinstance(keyword_obj, dict):
+                label_field = keyword_obj.get('label')
+                if isinstance(label_field, str):
+                    add_candidate(label_field)
+                elif isinstance(label_field, dict):
+                    nested = label_field.get('multilingual_label') if isinstance(label_field.get('multilingual_label'), dict) else None
+                    if nested:
+                        for lang_key in existing_lang_keys:
+                            if nested.get(lang_key):
+                                add_candidate(nested[lang_key], lang_key)
+                    else:
+                        for lang_key in existing_lang_keys:
+                            if label_field.get(lang_key):
+                                add_candidate(label_field[lang_key], lang_key)
+
+                multilingual = keyword_obj.get('multilingual_label')
+                if isinstance(multilingual, dict):
+                    for lang_key in existing_lang_keys:
+                        if multilingual.get(lang_key):
+                            add_candidate(multilingual[lang_key], lang_key)
+
+                for lang_key in existing_lang_keys:
+                    if keyword_obj.get(lang_key):
+                        add_candidate(keyword_obj[lang_key], lang_key)
+
+            elif isinstance(keyword_obj, str):
+                add_candidate(keyword_obj)
+
+            return candidates
+        
+        logging.info("=== Starting Progressive Keyword Generation ===")
+        
+        # STAGE 1: Try exact matches for existing I14Y keywords
+        existing_keywords = []
+        if i14y_item.get('keywords'):
+            existing_keywords = i14y_item['keywords']
+        elif i14y_item.get('keyword'):
+            existing_keywords = i14y_item['keyword']
+        elif i14y_item.get('theme'):
+            existing_keywords = i14y_item['theme']
+        
+        if not isinstance(existing_keywords, list):
+            existing_keywords = []
+        
+        if existing_keywords:
+            logging.info(f"Stage 1: Searching for exact matches of {len(existing_keywords)} existing keywords")
+            searched_terms = set()
+            for kw in existing_keywords:
+                if should_stop():
+                    break
+                label_candidates = extract_label_candidates(kw)
+                if not label_candidates:
+                    continue
+
+                for label_value, lang_hint in label_candidates:
+                    if should_stop():
+                        break
+
+                    normalized_key = (label_value.lower(), lang_hint or 'auto')
+                    if normalized_key in searched_terms:
+                        continue
+                    searched_terms.add(normalized_key)
+
+                    search_lang = lang_hint or query_lang
+
+                    termdat_matches = self.search_termdat(label_value, search_lang, include_synonyms=False)
+                    add_unique_keywords(termdat_matches)
+                    
+                    if not should_stop():
+                        gemet_matches = self.search_gemet(label_value)
+                        add_unique_keywords(gemet_matches)
+                    
+                    if not should_stop():
+                        wikidata_matches = self.search_wikidata(label_value)
+                        add_unique_keywords(wikidata_matches)
+            
+            logging.info(f"After Stage 1: {len(all_keywords)} keywords, {count_unique_labels()} unique")
+        
+        # STAGE 2: If < 10 matches, use NLP extraction
+        if not should_stop():
+            logging.info("Stage 2: Extracting keywords with NLP")
+            
+            # Gather text for analysis
+            text_parts = []
+            if i14y_item.get('title'):
+                title = i14y_item['title']
+                if isinstance(title, dict):
+                    text_parts.append(title.get('de') or title.get('en') or title.get('fr') or '')
+                else:
+                    text_parts.append(str(title))
+            
+            if i14y_item.get('description'):
+                desc = i14y_item['description']
+                if isinstance(desc, dict):
+                    text_parts.append(desc.get('de') or desc.get('en') or desc.get('fr') or '')
+                else:
+                    text_parts.append(str(desc))
+            
+            analysis_text = ' '.join(text_parts)
+            
+            if analysis_text:
+                extracted = self._extract_keywords_with_nlp(analysis_text, max_keywords=8)
+                logging.info(f"NLP extracted keywords: {extracted}")
+                
+                for keyword in extracted:
+                    if should_stop():
+                        break
+                    
+                    termdat_matches = self.search_termdat(keyword, query_lang, include_synonyms=True)
+                    add_unique_keywords(termdat_matches)
+                    
+                    if not should_stop():
+                        gemet_matches = self.search_gemet(keyword)
+                        add_unique_keywords(gemet_matches)
+                    
+                    if not should_stop():
+                        wikidata_matches = self.search_wikidata(keyword)
+                        add_unique_keywords(wikidata_matches)
+                
+                logging.info(f"After Stage 2: {len(all_keywords)} keywords, {count_unique_labels()} unique")
+        
+        # STAGE 3: If still < 10 matches, use OpenAI
+        if not should_stop() and self.openai_api_key:
+            logging.info("Stage 3: Extracting keywords with OpenAI")
+            
+            # Gather all available text including publisher and themes
+            text_parts = []
+            if i14y_item.get('title'):
+                title = i14y_item['title']
+                if isinstance(title, dict):
+                    text_parts.append("Title: " + (title.get('de') or title.get('en') or title.get('fr') or ''))
+                else:
+                    text_parts.append("Title: " + str(title))
+            
+            if i14y_item.get('description'):
+                desc = i14y_item['description']
+                if isinstance(desc, dict):
+                    text_parts.append("Description: " + (desc.get('de') or desc.get('en') or desc.get('fr') or ''))
+                else:
+                    text_parts.append("Description: " + str(desc))
+            
+            if i14y_item.get('publisher'):
+                pub = i14y_item['publisher']
+                if isinstance(pub, dict):
+                    pub_name = pub.get('name', pub)
+                    if isinstance(pub_name, dict):
+                        text_parts.append("Publisher: " + (pub_name.get('de') or pub_name.get('en') or ''))
+                    else:
+                        text_parts.append("Publisher: " + str(pub_name))
+                else:
+                    text_parts.append("Publisher: " + str(pub))
+            
+            analysis_text = '\n'.join(text_parts)
+            
+            if analysis_text:
+                try:
+                    extracted = self._extract_keywords_with_openai(analysis_text, max_keywords=10)
+                    if extracted:
+                        logging.info(f"OpenAI extracted keywords: {extracted}")
+                        
+                        for keyword in extracted:
+                            if should_stop():
+                                break
+                            
+                            termdat_matches = self.search_termdat(keyword, query_lang, include_synonyms=True)
+                            add_unique_keywords(termdat_matches)
+                            
+                            if not should_stop():
+                                gemet_matches = self.search_gemet(keyword)
+                                add_unique_keywords(gemet_matches)
+                            
+                            if not should_stop():
+                                wikidata_matches = self.search_wikidata(keyword)
+                                add_unique_keywords(wikidata_matches)
+                        
+                        logging.info(f"After Stage 3: {len(all_keywords)} keywords, {count_unique_labels()} unique")
+                except Exception as e:
+                    logging.error(f"OpenAI extraction failed: {e}")
+        
+        logging.info(f"=== Final: {len(all_keywords)} keywords, {count_unique_labels()} unique ===")
+        return all_keywords
 
 keyword_generator = KeywordGenerator()
 
 @app.route('/')
+def welcome():
+    """Landing page for workflow selection"""
+    return render_template('welcome.html')
+
+@app.route('/generate')
 def index():
+    """Generate keywords from description"""
     return render_template('index.html')
+
+@app.route('/refine')
+def refine():
+    """Refine existing I14Y item keywords - redirect to step 1"""
+    return redirect(url_for('refine_step1'))
+
+@app.route('/refine/step1')
+def refine_step1():
+    """Step 1: Search for I14Y item"""
+    return render_template('refine_step1.html')
+
+@app.route('/refine/step2')
+def refine_step2():
+    """Step 2: Review current item details"""
+    return render_template('refine_step2.html')
+
+@app.route('/refine/step3')
+def refine_step3():
+    """Step 3: Review, arrange, and select keywords"""
+    return render_template('refine_step3.html')
+
+@app.route('/refine/step4')
+def refine_step4():
+    """Step 4: Update keywords on I14Y"""
+    return render_template('refine_step4.html')
 
 @app.route('/search', methods=['POST'])
 def search_keywords():
     query = request.json.get('query', '').strip()
     query_lang = request.json.get('lang', 'de').strip().lower()
     include_synonyms = request.json.get('include_synonyms', True)  # Default to True
+    source_filter = request.json.get('source', 'all').lower()  # termdat, gemet, wikidata, or all
     
     if not query:
         return jsonify({'error': 'Query is required'}), 400
     
-    # Check cache first (include synonyms in cache key)
-    cache_key = f"{query}:{query_lang}:{include_synonyms}"
+    # Check cache first (include synonyms and source in cache key)
+    cache_key = f"{query}:{query_lang}:{include_synonyms}:{source_filter}"
     cached_result = cache.get(cache_key)
     if cached_result:
         return jsonify(cached_result)
 
     try:
-        keywords = keyword_generator.generate_keywords(query, query_lang, include_synonyms)
+        # Extract keywords to show user what was searched
+        extracted_keywords = keyword_generator._extract_keywords_from_text(query, max_keywords=5)
+        
+        # Generate keywords based on source filter
+        if source_filter == 'all':
+            keywords = keyword_generator.generate_keywords(query, query_lang, include_synonyms)
+        else:
+            keywords = []
+            for keyword in extracted_keywords:
+                if source_filter == 'termdat':
+                    keywords.extend(keyword_generator.search_termdat(keyword, query_lang, include_synonyms))
+                elif source_filter == 'gemet':
+                    keywords.extend(keyword_generator.search_gemet(keyword))
+                elif source_filter == 'wikidata':
+                    keywords.extend(keyword_generator.search_wikidata(keyword))
+        
         i14y_keywords = keyword_generator._convert_to_i14y_format(keywords)
         
         # Ensure all keywords are JSON serializable
@@ -1173,16 +1656,23 @@ def search_keywords():
                     'query_lang': kw.get('query_lang', query_lang),
                     'available_languages': kw.get('available_languages', list(kw.get('multilingual_label', {}).keys())),
                     'is_synonym_result': kw.get('is_synonym_result', False),
-                    'found_via_query': kw.get('found_via_query', query)
+                    'found_via_query': kw.get('found_via_query', query),
+                    'extracted_from': kw.get('extracted_from'),
+                    'search_keyword': kw.get('search_keyword')
                 }
                 sanitized_keywords.append(sanitized_kw)
             except Exception as e:
                 logging.error(f"Error sanitizing keyword for JSON: {e}")
         
+        # Determine if this was a multi-keyword extraction
+        is_text_extraction = len(query.split()) > 3
+        
         result = {
             'query': query,
             'query_lang': query_lang,
             'include_synonyms': include_synonyms,
+            'is_text_extraction': is_text_extraction,
+            'extracted_keywords': extracted_keywords if is_text_extraction else None,
             'keywords': sanitized_keywords,  # Use sanitized keywords
             'i14y_keywords': i14y_keywords,  # I14Y-ready format for upload
             'total': len(sanitized_keywords),
@@ -1201,6 +1691,60 @@ def search_keywords():
     except Exception as e:
         logging.error(f"Search error: {e}", exc_info=True)
         return jsonify({'error': f'Error during search: {str(e)}'}), 500
+
+@app.route('/generate-progressive-keywords', methods=['POST'])
+def generate_progressive_keywords():
+    """Generate keywords using improved progressive algorithm for workflow 1"""
+    data = request.json
+    i14y_item = data.get('i14y_item', {})
+    query_lang = data.get('lang', 'de').strip().lower()
+    
+    if not i14y_item:
+        return jsonify({'error': 'I14Y item data is required'}), 400
+    
+    try:
+        logging.info(f"Progressive keyword generation for item: {i14y_item.get('id', 'unknown')}")
+        
+        # Generate keywords using progressive algorithm
+        keywords = keyword_generator.generate_keywords_progressive(i14y_item, query_lang)
+        
+        # Convert to I14Y format
+        i14y_keywords = keyword_generator._convert_to_i14y_format(keywords)
+        
+        # Sanitize for JSON
+        sanitized_keywords = []
+        for kw in keywords:
+            try:
+                sanitized_kw = {
+                    'source': kw.get('source', ''),
+                    'multilingual_label': kw.get('multilingual_label', {}),
+                    'uri': kw.get('uri', ''),
+                    'description': kw.get('description', ''),
+                    'entry_id': kw.get('entry_id', ''),
+                    'query_lang': kw.get('query_lang', query_lang),
+                    'available_languages': kw.get('available_languages', list(kw.get('multilingual_label', {}).keys())),
+                }
+                sanitized_keywords.append(sanitized_kw)
+            except Exception as e:
+                logging.error(f"Error sanitizing keyword: {e}")
+        
+        result = {
+            'keywords': sanitized_keywords,
+            'i14y_keywords': i14y_keywords,
+            'total': len(sanitized_keywords),
+            'unique_count': len(set(
+                kw.get('multilingual_label', {}).get('de', '') or 
+                kw.get('multilingual_label', {}).get('en', '') or 
+                kw.get('multilingual_label', {}).get('fr', '')
+                for kw in sanitized_keywords
+            ))
+        }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logging.error(f"Progressive keyword generation error: {e}", exc_info=True)
+        return jsonify({'error': f'Error generating keywords: {str(e)}'}), 500
 
 @app.route('/upload')
 def upload_keywords():
@@ -1265,41 +1809,105 @@ def upload_to_i14y():
             if not first_contact.get('hasEmail') or first_contact.get('hasEmail').strip() == '':
                 first_contact['hasEmail'] = 'i14y@bfs.admin.ch'
         
+        # Helpers to normalize keywords to new structure for comparison
+        def normalize_keyword(kw):
+            """Return {'label': {...}, 'uri': ...} regardless of incoming schema"""
+            label = {}
+            uri = ''
+            if not isinstance(kw, dict):
+                return None
+            
+            # New schema
+            if isinstance(kw.get('label'), dict):
+                for lang in ['de', 'fr', 'it', 'en', 'rm']:
+                    if kw['label'].get(lang):
+                        label[lang] = kw['label'][lang]
+            
+            # Legacy language keys
+            for lang in ['de', 'fr', 'it', 'en', 'rm']:
+                if kw.get(lang):
+                    label.setdefault(lang, kw[lang])
+            
+            uri = kw.get('uri') or kw.get('_uri', '')
+            
+            if not label:
+                return None
+            return {'label': label, 'uri': uri}
+
         # Step 4: Find ALL keyword arrays in the dataset and merge them
-        existing_keywords = []
+        existing_keywords_raw = []
         
         # Check for keywords at the top level of dataset_data
-        if 'keywords' in dataset_data:
-            if isinstance(dataset_data['keywords'], list):
-                existing_keywords.extend(dataset_data['keywords'])
+        if 'keywords' in dataset_data and isinstance(dataset_data['keywords'], list):
+            existing_keywords_raw.extend(dataset_data['keywords'])
         
         # Check for keywords in distributions (if they exist there)
         if 'distributions' in dataset_data:
-            for i, dist in enumerate(dataset_data['distributions']):
-                if isinstance(dist, dict) and 'keywords' in dist:
-                    if isinstance(dist['keywords'], list):
-                        existing_keywords.extend(dist['keywords'])
+            for dist in dataset_data['distributions']:
+                if isinstance(dist, dict) and isinstance(dist.get('keywords'), list):
+                    existing_keywords_raw.extend(dist['keywords'])
                 
-        # Create a set of existing keyword strings to avoid duplicates
-        existing_keyword_strings = set()
-        for kw in existing_keywords:
-            # Use German text as the key for duplicate detection
-            if isinstance(kw, dict) and 'de' in kw:
-                existing_keyword_strings.add(kw['de'].lower())
+        # Detect whether existing dataset already uses new schema
+        uses_new_schema = any(isinstance(k, dict) and 'label' in k for k in existing_keywords_raw)
+
+        # Normalize existing keywords
+        normalized_existing = []
+        for kw in existing_keywords_raw:
+            norm = normalize_keyword(kw)
+            if norm:
+                normalized_existing.append(norm)
             else:
-                print(f"DEBUG: Skipping invalid keyword: {kw}")
+                logging.debug(f"Skipping invalid keyword from dataset: {kw}")
         
-        # Add new keywords if they don't already exist
+        # Deduplicate by preferred language text
+        def keyword_key(norm_kw):
+            lbl = norm_kw.get('label', {})
+            for lang in ['de', 'en', 'fr', 'it', 'rm']:
+                if lbl.get(lang):
+                    return lbl[lang].lower()
+            return None
+        
+        existing_keys = set()
+        for nkw in normalized_existing:
+            key = keyword_key(nkw)
+            if key:
+                existing_keys.add(key)
+        
+        # Normalize incoming keywords (from client) and merge
         keywords_added = 0
-        for new_kw in new_keywords:
-            if isinstance(new_kw, dict) and 'de' in new_kw:
-                if new_kw['de'].lower() not in existing_keyword_strings:
-                    existing_keywords.append(new_kw)
-                    existing_keyword_strings.add(new_kw['de'].lower())
-                    keywords_added += 1
+        normalized_new = []
+        for kw in new_keywords:
+            norm = normalize_keyword(kw)
+            if not norm:
+                continue
+            key = keyword_key(norm)
+            if key and key not in existing_keys:
+                normalized_new.append(norm)
+                existing_keys.add(key)
+                keywords_added += 1
+        
+        merged_keywords = normalized_existing + normalized_new
+
+        # Decide output schema: keep original (legacy vs new)
+        output_keywords = []
+        if uses_new_schema:
+            for kw in merged_keywords:
+                output_keywords.append({
+                    'label': kw.get('label', {}),
+                    'uri': kw.get('uri', '')
+                })
+        else:
+            # Legacy schema with language keys; include uri for forward compatibility
+            for kw in merged_keywords:
+                label = kw.get('label', {})
+                legacy_kw = {lang: text for lang, text in label.items() if text}
+                if kw.get('uri'):
+                    legacy_kw['uri'] = kw['uri']
+                if legacy_kw:
+                    output_keywords.append(legacy_kw)
         
         # Update the dataset with the merged keywords - IMPORTANT: Set only once!
-        dataset_data['keywords'] = existing_keywords
+        dataset_data['keywords'] = output_keywords
         
         # Remove any other keywords arrays to avoid conflicts
         if 'distributions' in dataset_data:
@@ -1321,7 +1929,7 @@ def upload_to_i14y():
             return jsonify({
                 'success': True, 
                 'message': f'Successfully added {keywords_added} new keywords to I14Y dataset',
-                'total_keywords': len(existing_keywords),
+                'total_keywords': len(normalized_existing),
                 'keywords_added': keywords_added,
                 'status_code': put_response.status_code,
                 'dataset_link': dataset_link
@@ -1346,6 +1954,487 @@ def upload_to_i14y():
         return jsonify({'error': 'Could not connect to I14Y API'}), 503
     except Exception as e:
         return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@app.route('/search-i14y-datasets', methods=['POST'])
+def search_i14y_datasets():
+    """Search I14Y datasets using the I14Y API search endpoint"""
+    query = request.json.get('query', '').strip()
+    page = request.json.get('page', 1)
+    page_size = request.json.get('pageSize', 25)
+    object_type_filter = request.json.get('objectType', '').strip().lower()  # 'dataset', 'dataservice', 'publicservice', 'concept'
+    organisation_filter = request.json.get('organisation', '').strip()  # Organisation ID or name
+    
+    if not query:
+        return jsonify({'error': 'Search query is required'}), 400
+    
+    try:
+        # I14Y API search endpoint (selectable env)
+        env = request.json.get('env', 'prod').lower()
+        if env not in ['abnahme', 'prod']:
+            env = 'prod'
+
+        search_base = {
+            'abnahme': "https://input-backend.i14y.a.c.bfs.admin.ch",
+            'prod': "https://input-backend.i14y.c.bfs.admin.ch"
+        }[env]
+
+        i14y_search_url = f"{search_base}/api/Catalog/search"
+        
+        params = {
+            'query': query,
+            'page': page,
+            'pageSize': page_size
+        }
+        
+        logging.info(f"Searching I14Y for: '{query}' (page {page}, size {page_size})")
+        
+        # Make request to I14Y search API
+        response = requests.get(i14y_search_url, params=params, timeout=10)
+        
+        if not response.ok:
+            logging.error(f"I14Y API error: {response.status_code} - {response.text}")
+            return jsonify({'error': f'I14Y API returned {response.status_code}'}), response.status_code
+        
+        data = response.json()
+        
+        # Extract relevant dataset information
+        # The API response is a list of datasets directly
+        datasets = []
+        
+        # Handle both list and dict responses
+        if isinstance(data, list):
+            data_list = data
+        elif isinstance(data, dict):
+            # Try different possible keys for datasets
+            data_list = data.get('datasets', data.get('data', []))
+            if isinstance(data_list, dict):
+                data_list = []
+        else:
+            data_list = []
+        
+        logging.info(f"I14Y API response type: {type(data)}, raw data: {str(data)[:200]}")
+        
+        for dataset in data_list:
+            if not isinstance(dataset, dict):
+                continue
+            
+            # Helper function to extract text from potentially multilingual fields
+            def extract_text(field):
+                if isinstance(field, dict):
+                    # Prefer EN, then DE, then FR, then IT
+                    return field.get('en') or field.get('de') or field.get('fr') or field.get('it') or ''
+                elif isinstance(field, str):
+                    return field
+                return ''
+
+            def extract_status_field(field):
+                if isinstance(field, dict):
+                    return field.get('de') or field.get('fr') or field.get('en') or field.get('it') or ''
+                elif isinstance(field, str):
+                    return field
+                return ''
+            
+            def extract_publisher_name(publisher_field):
+                """Extract publisher name from nested structure: publisher.name[lang]"""
+                if isinstance(publisher_field, dict):
+                    name = publisher_field.get('name')
+                    if name:
+                        return extract_text(name)
+                    # Fallback to direct multilingual field
+                    return extract_text(publisher_field)
+                elif isinstance(publisher_field, str):
+                    return publisher_field
+                return ''
+            
+            # Determine object type from the dataset structure
+            # The I14Y API returns different fields based on object type
+            # First check if there's an explicit type field
+            object_type = 'dataset'  # Default
+            
+            # Check for explicit type indicators first
+            if 'type' in dataset:
+                type_value = dataset['type'].lower() if isinstance(dataset['type'], str) else str(dataset['type']).lower()
+                if 'dataservice' in type_value or 'data-service' in type_value:
+                    object_type = 'dataservice'
+                elif 'publicservice' in type_value or 'public-service' in type_value:
+                    object_type = 'publicservice'
+                elif 'concept' in type_value:
+                    object_type = 'concept'
+                else:
+                    object_type = 'dataset'
+            # If no explicit type, use field presence detection
+            elif 'endpointUrls' in dataset or 'servesDatasets' in dataset:
+                object_type = 'dataservice'
+            elif 'channels' in dataset or 'isDescribedAt' in dataset:
+                object_type = 'publicservice'
+            elif 'conceptType' in dataset and 'distribution' not in dataset and 'landingPage' not in dataset:
+                # Only classify as concept if it has conceptType AND doesn't have dataset-specific fields
+                object_type = 'concept'
+            else:
+                # Default to dataset if it has typical dataset fields
+                object_type = 'dataset'
+                
+            dataset_info = {
+                'id': dataset.get('guid', '') or dataset.get('id', '') or dataset.get('identifier', ''),
+                'guid': dataset.get('guid', '') or dataset.get('id', '') or dataset.get('identifier', ''),
+                'title': extract_text(dataset.get('title', '')) or extract_text(dataset.get('name', '')) or extract_text(dataset.get('prefLabel', '')),
+                'description': extract_text(dataset.get('description', '')),
+                'publisher': extract_publisher_name(dataset.get('publisher', '')) or 
+                           extract_publisher_name(dataset.get('organisation', '')) or
+                           extract_publisher_name(dataset.get('publisherName', '')),
+                'status': extract_status_field(dataset.get('registrationStatus')) or
+                          extract_status_field(dataset.get('status')) or
+                          extract_status_field(dataset.get('lifeCycleStatus')) or
+                          extract_status_field(dataset.get('lifecycleStatus')) or
+                          extract_status_field(dataset.get('state')) or
+                          extract_status_field(dataset.get('statusText')),
+                'publicationLevel': dataset.get('publicationLevel', ''),
+                'modified': dataset.get('modified', '') or dataset.get('modificationDate', ''),
+                'url': f"https://input.i14y.admin.ch/catalog/datasets/{dataset.get('guid', '') or dataset.get('id', '')}" if (dataset.get('guid') or dataset.get('id')) else '',
+                'objectType': object_type,
+                'fullObject': dataset  # Store the full object for later use in updates
+            }
+            
+            # Only include if we have at least a title or description
+            if dataset_info['title'] or dataset_info['description']:
+                datasets.append(dataset_info)
+        
+        # Apply filters
+        filtered_datasets = []
+        for dataset in datasets:
+            # Filter by object type
+            if object_type_filter and dataset['objectType'] != object_type_filter:
+                continue
+            
+            # Filter by organisation
+            if organisation_filter:
+                # Check if organisation matches (by ID or name)
+                publisher_name = dataset.get('publisher', '').lower()
+                if organisation_filter.lower() not in publisher_name and dataset.get('organisation_id', '') != organisation_filter:
+                    continue
+            
+            filtered_datasets.append(dataset)
+        
+        result = {
+            'datasets': filtered_datasets,
+            'total': len(filtered_datasets),
+            'page': page,
+            'pageSize': page_size,
+            'query': query
+        }
+        
+        logging.info(f"Found {len(datasets)} datasets in I14Y")
+        return jsonify(result)
+        
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'I14Y API request timed out'}), 504
+    except requests.exceptions.ConnectionError:
+        return jsonify({'error': 'Could not connect to I14Y API'}), 503
+    except Exception as e:
+        logging.error(f"I14Y search error: {e}", exc_info=True)
+        return jsonify({'error': f'Error searching I14Y: {str(e)}'}), 500
+
+
+@app.route('/get-i14y-object', methods=['POST'])
+def get_i14y_object():
+    """Fetch a full I14Y object (dataset/dataservice/publicservice/concept) from the public API.
+    Used to retrieve complete keyword arrays when the search response omits them."""
+    try:
+        req = request.get_json(force=True)
+        object_id = req.get('objectId') or req.get('object_id')
+        object_type = (req.get('objectType') or req.get('object_type') or 'dataset').lower()
+        env = (req.get('env') or 'prod').lower()
+
+        if not object_id:
+            return jsonify({'error': 'objectId is required'}), 400
+
+        if object_type not in ['dataset', 'dataservice', 'publicservice', 'concept']:
+            return jsonify({'error': f'Unsupported objectType: {object_type}'}), 400
+
+        if env not in ['abnahme', 'prod']:
+            env = 'prod'
+
+        public_base = {
+            'abnahme': 'https://api-a.i14y.admin.ch/api/public/v1',
+            'prod': 'https://api.i14y.admin.ch/api/public/v1'
+        }[env]
+
+        endpoint_map = {
+            'dataset': '/datasets',
+            'dataservice': '/dataservices',
+            'publicservice': '/publicservices',
+            'concept': '/concepts'
+        }
+
+        url = f"{public_base}{endpoint_map[object_type]}/{object_id}"
+
+        verify_ssl = NETWORK_ENV != "internal"
+        response = requests.get(url, timeout=10, verify=verify_ssl)
+
+        if not response.ok:
+            logging.error(f"Failed to fetch I14Y object {object_type}:{object_id} ({env}): HTTP {response.status_code} - {response.text}")
+            return jsonify({'error': f'I14Y public API returned {response.status_code}'}), response.status_code
+
+        payload = response.json()
+        full_object = payload.get('data', payload)
+
+        return jsonify({'fullObject': full_object})
+
+    except Exception as e:
+        logging.error(f"Error fetching I14Y object: {e}", exc_info=True)
+        return jsonify({'error': f'Error fetching I14Y object: {str(e)}'}), 500
+
+@app.route('/update-i14y-keywords', methods=['POST'])
+def update_i14y_keywords():
+    """Update keywords on I14Y via the Partner API using PUT request"""
+    try:
+        data = request.get_json()
+        
+        object_id = data.get('objectId') or data.get('object_id')
+        object_type = (data.get('objectType') or data.get('object_type') or 'dataset').lower()
+        keywords = data.get('keywords', [])
+        api_token = data.get('apiToken') or data.get('api_token')
+        full_dataset = data.get('fullDataset') or data.get('full_dataset') or {}
+        if not isinstance(full_dataset, dict):
+            full_dataset = {}
+        
+        if not object_id:
+            return jsonify({'error': 'Object ID is required'}), 400
+        
+        if not api_token:
+            return jsonify({'error': 'API token is required'}), 400
+            
+        if not api_token.startswith('Bearer '):
+            return jsonify({'error': 'API token must start with "Bearer "'}), 400
+        
+        if not keywords:
+            return jsonify({'error': 'At least one keyword is required'}), 400
+        
+        # Map object types to API endpoints
+        endpoint_map = {
+            'dataset': f'/datasets/{object_id}',
+            'dataservice': f'/dataservices/{object_id}',
+            'publicservice': f'/publicservices/{object_id}',
+            'concept': f'/concepts/{object_id}'
+        }
+        
+        endpoint = endpoint_map.get(object_type)
+        if not endpoint:
+            return jsonify({'error': f'Unknown object type: {object_type}'}), 400
+        
+        # Format keywords according to new I14Y structure
+        # New structure: {"label": {"de": "...", "en": "...", "fr": "...", "it": "...", "rm": "..."}, "uri": "..."}
+        formatted_keywords = []
+        for kw in keywords:
+            keyword_obj = {
+                "label": {},
+                "uri": kw.get('uri', '')
+            }
+            
+            # Handle multilingual_label (from TERMDAT/GEMET)
+            if 'multilingual_label' in kw:
+                ml = kw['multilingual_label']
+                keyword_obj['label'] = {
+                    'de': ml.get('de', ''),
+                    'en': ml.get('en', ''),
+                    'fr': ml.get('fr', ''),
+                    'it': ml.get('it', ''),
+                    'rm': ml.get('rm', '')
+                }
+            # Handle plain label string (from Wikidata or fallback)
+            elif 'label' in kw:
+                label_text = kw['label']
+                # Distribute to all languages if we have a plain string
+                keyword_obj['label'] = {
+                    'de': label_text,
+                    'en': label_text,
+                    'fr': label_text,
+                    'it': label_text,
+                    'rm': label_text
+                }
+            else:
+                # Fallback: no label found
+                logging.warning(f"Keyword has no label: {kw}")
+                continue
+                
+            formatted_keywords.append(keyword_obj)
+        
+        if not formatted_keywords:
+            return jsonify({'error': 'No valid keywords to update'}), 400
+        
+        # Prepare the PUT request body
+        # We need to send the full object back with updated keywords
+        # Get the fullObject from the dataset
+        full_object = (
+            full_dataset.get('fullObject') or
+            full_dataset.get('full_object') or
+            data.get('fullObject') or
+            data.get('full_object') or {}
+        )
+        
+        # If fullObject is not available, create minimal required structure
+        if not full_object:
+            logging.warning("fullObject not available in dataset, creating minimal structure")
+            full_object = {
+                'title': full_dataset.get('title', {}),
+                'description': full_dataset.get('description', {}),
+                'identifier': full_dataset.get('guid') or full_dataset.get('id'),
+            }
+        
+        # Start with the existing data and update only the keywords field
+        update_data = full_object.copy()
+        
+        # Update keywords in the payload
+        update_data['keywords'] = formatted_keywords
+        
+        # Remove read-only fields that shouldn't be sent in PUT
+        # These fields are returned by GET but should not be included in PUT
+        readonly_fields = ['id', 'guid', 'publicationLevel', 'publicationLevelProposal', 
+                          'registrationStatus', 'registrationStatusProposal',
+                          'isLocked', 'codeListEntries']
+        for field in readonly_fields:
+            update_data.pop(field, None)
+        
+        # Wrap in data object as required by API
+        update_payload = {
+            "data": update_data
+        }
+        
+        # Pick Partner API base by env
+        env = data.get('env', 'prod').lower()
+        if env not in ['abnahme', 'prod']:
+            env = 'prod'
+
+        partner_base = {
+            'abnahme': 'https://api-a.i14y.admin.ch/api/partner/v1',
+            'prod': 'https://api.i14y.admin.ch/api/partner/v1'
+        }[env]
+
+        partner_api_url = f'{partner_base}{endpoint}'
+        
+        headers = {
+            'Authorization': api_token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        
+        logging.info(f"Updating {object_type} {object_id} on I14Y with {len(formatted_keywords)} keywords")
+        logging.debug(f"PUT URL: {partner_api_url}")
+        logging.debug(f"Keywords payload: {json.dumps(formatted_keywords, indent=2)}")
+        
+        response = requests.put(
+            partner_api_url,
+            json=update_payload,
+            headers=headers,
+            timeout=30
+        )
+        
+        # Check response
+        if response.status_code == 204:
+            # Success - No Content
+            logging.info(f"Successfully updated keywords for {object_type} {object_id}")
+            return jsonify({
+                'success': True,
+                'message': f'Successfully updated {len(formatted_keywords)} keywords',
+                'object_id': object_id,
+                'object_type': object_type
+            })
+        elif response.status_code == 401:
+            return jsonify({'error': 'Unauthorized - Invalid API token'}), 401
+        elif response.status_code == 403:
+            return jsonify({'error': 'Forbidden - You do not have permission to update this object'}), 403
+        elif response.status_code == 404:
+            return jsonify({'error': f'Object not found: {object_type} {object_id}'}), 404
+        else:
+            # Try to get error details from response
+            try:
+                error_data = response.json()
+                error_msg = error_data.get('title') or error_data.get('detail') or str(error_data)
+            except:
+                error_msg = response.text or f'HTTP {response.status_code}'
+            
+            logging.error(f"I14Y API error: {response.status_code} - {error_msg}")
+            return jsonify({'error': f'I14Y API error: {error_msg}'}), response.status_code
+            
+    except requests.exceptions.Timeout:
+        logging.error("I14Y API request timed out")
+        return jsonify({'error': 'Request to I14Y API timed out'}), 504
+    except requests.exceptions.ConnectionError:
+        logging.error("Could not connect to I14Y API")
+        return jsonify({'error': 'Could not connect to I14Y API'}), 503
+    except Exception as e:
+        logging.error(f"Error updating keywords on I14Y: {e}", exc_info=True)
+        return jsonify({'error': f'Error updating keywords: {str(e)}'}), 500
+
+@app.route('/get-i14y-organisations', methods=['POST'])
+def get_i14y_organisations():
+    """Fetch organisations from I14Y agents endpoint"""
+    try:
+        env = request.json.get('env', 'prod').lower()
+        if env not in ['abnahme', 'prod']:
+            env = 'prod'
+
+        agents_base = {
+            'abnahme': "https://input-backend.i14y.a.c.bfs.admin.ch/api/Agent",
+            'prod': "https://input-backend.i14y.c.bfs.admin.ch/api/Agent"
+        }[env]
+
+        response = requests.get(agents_base, timeout=10)
+        
+        if not response.ok:
+            logging.error(f"Failed to fetch organisations: HTTP {response.status_code}")
+            return jsonify({'error': f'Failed to fetch organisations: {response.status_code}'}), response.status_code
+        
+        data = response.json()
+        
+        # Extract organisations with all language variants
+        organisations = []
+        if isinstance(data, list):
+            for agent in data:
+                if isinstance(agent, dict):
+                    # Extract all language variants
+                    names = {}
+                    if 'name' in agent and isinstance(agent['name'], dict):
+                        names = {
+                            'de': agent['name'].get('de', ''),
+                            'fr': agent['name'].get('fr', ''),
+                            'it': agent['name'].get('it', ''),
+                            'en': agent['name'].get('en', ''),
+                            'rm': agent['name'].get('rm', '')
+                        }
+                    elif 'name' in agent and isinstance(agent['name'], str):
+                        names = {'de': agent['name']}
+                    elif 'prefLabel' in agent and isinstance(agent['prefLabel'], dict):
+                        names = {
+                            'de': agent['prefLabel'].get('de', ''),
+                            'fr': agent['prefLabel'].get('fr', ''),
+                            'it': agent['prefLabel'].get('it', ''),
+                            'en': agent['prefLabel'].get('en', ''),
+                            'rm': agent['prefLabel'].get('rm', '')
+                        }
+                    
+                    # Get primary display name (prefer German)
+                    display_name = names.get('de') or names.get('en') or names.get('fr') or names.get('it') or ''
+                    
+                    if display_name:
+                        organisations.append({
+                            'id': agent.get('id', ''),
+                            'name': display_name,
+                            'names': names  # All language variants
+                        })
+        
+        # Sort alphabetically
+        organisations.sort(key=lambda x: x['name'].lower())
+        
+        return jsonify({'organisations': organisations})
+        
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Request to I14Y API timed out'}), 504
+    except requests.exceptions.ConnectionError:
+        return jsonify({'error': 'Could not connect to I14Y API'}), 503
+    except Exception as e:
+        logging.error(f"Error fetching organisations: {e}", exc_info=True)
+        return jsonify({'error': f'Error fetching organisations: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)

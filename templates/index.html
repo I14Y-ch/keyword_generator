@@ -6,9 +6,6 @@
     <title>I14Y Keyword Generator</title>
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-    <style>
-        /* Component-specific styles moved to styles.css */
-    </style>
 </head>
 <body>
     <div class="beta-badge">Beta</div>
@@ -17,8 +14,10 @@
         <div class="header-wrapper">
             <div class="layout-brand">
                 <div class="brand-left">
-                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
-                    <h1 class="header-title">I14Y Tools</h1>
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
                 </div>
             </div>
         </div>
