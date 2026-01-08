@@ -57,23 +57,72 @@ class KeywordGenerator:
         # OpenAI API key for keyword extraction (optional)
         self.openai_api_key = os.environ.get('OPENAI_API_KEY')
         
-        # Initialize spaCy for semantic similarity and NLP tasks
+        # Initialize spaCy for lightweight tokenization (model optional)
         self.nlp = None
         try:
             import spacy
-            self.nlp = spacy.load("de_core_news_md")
-            logging.info("spaCy German model loaded for semantic similarity and NLP")
-        except OSError:
-            logging.warning("spaCy model 'de_core_news_md' not found; falling back to lightweight keyword extraction")
-            logging.info("To use the spaCy German model, run: python -m spacy download de_core_news_md")
+            # Try to load a lightweight spacy model if available, but don't fail if missing
+            try:
+                self.nlp = spacy.load("de_core_news_sm")
+                logging.info("spaCy model loaded for lightweight tokenization")
+            except OSError:
+                logging.info("spaCy model not available - will use regex-based extraction")
+        except ImportError:
+            logging.info("spacy not available - using regex-based extraction")
+
+    def _extract_keywords_openai(self, text, max_keywords=5, language='de'):
+        """Extract keywords using OpenAI API (preferred method for better results).
+        
+        Args:
+            text (str): Input text to analyze
+            max_keywords (int): Maximum number of keywords to return
+            language (str): Language code (de, en, fr, it)
+            
+        Returns:
+            list: Extracted keywords
+        """
+        if not self.openai_api_key:
+            return None
+            
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=self.openai_api_key)
+            
+            lang_names = {'de': 'German', 'en': 'English', 'fr': 'French', 'it': 'Italian'}
+            lang_name = lang_names.get(language, 'German')
+            
+            prompt = f"""Extract up to {max_keywords} main keywords or key phrases from the following {lang_name} text. 
+Return only the keywords/phrases, one per line, without numbering or explanations.
+Focus on important domain-specific terms and concepts.
+
+Text: {text[:1000]}"""
+            
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=200
+            )
+            
+            keywords = [k.strip() for k in response.choices[0].message.content.split('\n') if k.strip()]
+            return keywords[:max_keywords]
+        except Exception as e:
+            logging.debug(f"OpenAI keyword extraction failed: {e}")
+            return None
 
     def _extract_keywords_from_text(self, text, max_keywords=5, nouns_only=False):
-        """Extract representative keywords from free-form text using spaCy and regex fallbacks.
+        """Extract representative keywords from free-form text.
+        
+        Tries OpenAI first (if API key available), then falls back to spaCy (if available),
+        then uses regex heuristics as final fallback.
 
         Args:
             text (str): Input text to analyze
             max_keywords (int): Maximum number of keywords to return
-            nouns_only (bool): If True, only return noun/proper-noun tokens
+            nouns_only (bool): If True, only return noun/proper-noun tokens (regex mode only)
+            
+        Returns:
+            list: Extracted keywords
         """
         if not text:
             return []
@@ -82,9 +131,14 @@ class KeywordGenerator:
         if not text:
             return []
 
-        # For very short inputs, just return the cleaned text
-        if len(text.split()) <= 3:
-            return [text]
+        # Try OpenAI first if available (recommended for best results)
+        if self.openai_api_key:
+            openai_keywords = self._extract_keywords_openai(text, max_keywords=max_keywords)
+            if openai_keywords:
+                logging.info(f"Extracted {len(openai_keywords)} keywords using OpenAI")
+                return openai_keywords
+        
+        # Fall back to spaCy + regex method
 
         stopwords = {
             'der', 'die', 'das', 'und', 'oder', 'sowie', 'mit', 'auf', 'für', 'von', 'den', 'im', 'in', 'am',

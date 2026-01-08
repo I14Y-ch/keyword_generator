@@ -48,7 +48,9 @@ instance/
 
 # Spacy models
 en_core_web_sm/
-de_core_news_md/
+de_core_news_sm/
+fr_core_news_sm/
+it_core_news_sm/
 en_core_news_sm/
 de_core_news_sm/
 fr_core_news_sm/
