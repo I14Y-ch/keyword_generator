@@ -1348,4 +1348,5 @@ def upload_to_i14y():
         return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8080)
+    debug_mode = os.getenv("FLASK_DEBUG", "").lower() in ("1", "true", "yes")
+    app.run(host='0.0.0.0', port=8080, debug=debug_mode)
