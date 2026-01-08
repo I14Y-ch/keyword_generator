@@ -91,8 +91,8 @@ class KeywordGenerator:
             lang_names = {'de': 'German', 'en': 'English', 'fr': 'French', 'it': 'Italian'}
             lang_name = lang_names.get(language, 'German')
             
-            prompt = f"""You are an expert in energy supply terminology. Extract the {max_keywords} most relevant domain-specific keywords or key phrases from the following {lang_name} text.
-- Prioritize energy, gas flow, infrastructure, and fuel terms.
+            prompt = f"""You are an expert taxonomist for public-sector and government data. Extract the {max_keywords} most relevant domain-specific keywords or key phrases from the following {lang_name} text.
+- Applicable domains include administration, infrastructure, economy, environment, health, mobility, energy, statistics, and public services.
 - Return a compact JSON array of unique keywords in {lang_name}.
 - Keep nouns/compounds (max 3 words each). No explanations, no numbering.
 
