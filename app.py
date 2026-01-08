@@ -56,7 +56,6 @@ class KeywordGenerator:
         
         # OpenAI API key for keyword extraction (optional)
         self.openai_api_key = os.environ.get('OPENAI_API_KEY')
-        
         # Initialize spaCy for lightweight tokenization (model optional)
         self.nlp = None
         try:
@@ -258,106 +257,70 @@ Text: {text[:1200]}"""
         return unique
 
     def _split_compound_words(self, word, depth=0, max_depth=2):
-        """Split German compound words into their component parts using heuristics and spaCy.
-        Now supports recursive splitting for multi-part compounds.
-        
-        Example: 'Umfahrungsstrasse' -> ['Umfahrung', 'Strasse']
-        Example: 'Strassenbelag' -> ['Strasse', 'Belag']
-        Example: 'Skirennfahrerin' -> ['Ski', 'Renn', 'Fahrerin']
-        
-        Args:
-            word: German compound word to split
-            depth: Current recursion depth (internal)
-            max_depth: Maximum recursion depth to prevent infinite loops
-            
-        Returns:
-            list: List of component words (or [word] if splitting not available/fails)
-        """
-        # Only split if word is long enough and likely a compound
-        # At top level, require minimum 8 chars; at deeper levels allow 6+
+        """Split potential compound words using language-agnostic heuristics."""
         min_word_len = 8 if depth == 0 else 6
         if len(word) < min_word_len or depth >= max_depth:
             return [word]
-        
+
         try:
-            word_lower = word.lower()
-            components = []
-            
-            # Strategy 1a: Check for common word parts at the END (with connectors)
-            # Sort by length descending to try longest matches first
-            connectors = ['s', 'es', 'n', 'en', 'er', 'e', '']  # Empty string for no connector
-            for part in sorted(self.common_word_parts, key=len, reverse=True):
-                # Try with connectors at the end
+            normalized = word.strip()
+            connectors = ['s', 'es', 'en', 'er', 'e', 'n']
+            vowels = set('aeiouäöüyAEIOUÄÖÜY')
+            min_component_len = 3 if depth > 0 else 4
+
+            def is_meaningful(part):
+                cleaned = part.strip('-')
+                if len(cleaned) < min_component_len:
+                    return False
+                if not cleaned.isalpha():
+                    return False
+                return any(ch in vowels for ch in cleaned.lower())
+
+            def capitalize_parts(parts):
+                return [p[:1].upper() + p[1:] if p else p for p in parts]
+
+            word_len = len(normalized)
+            for split in range(min_component_len, word_len - min_component_len + 1):
+                left = normalized[:split]
+                right = normalized[split:]
+
+                def recurse_split(left_part, right_part):
+                    left_parts = self._split_compound_words(left_part, depth + 1, max_depth)
+                    right_parts = self._split_compound_words(right_part, depth + 1, max_depth)
+                    components = capitalize_parts(left_parts + right_parts)
+                    logging.info(f"Split compound word '{word}' into: {components} (depth={depth})")
+                    return components
+
+                if is_meaningful(left) and is_meaningful(right):
+                    return recurse_split(left, right)
+
                 for connector in connectors:
-                    search_pattern = connector + part
-                    if word_lower.endswith(search_pattern) and len(word_lower) > len(search_pattern):
-                        prefix_len = len(word) - len(search_pattern)
-                        prefix = word[:prefix_len]
-                        suffix = word[prefix_len + len(connector):]  # Skip the connector
-                        
-                        # Only split if prefix is meaningful
-                        # At deeper levels, allow shorter parts (>= 3) to catch words like "Ski", "Renn"
-                        min_prefix_len = 3 if depth > 0 else 4
-                        min_suffix_len = 3
-                        if len(prefix) >= min_prefix_len and len(suffix) >= min_suffix_len:
-                            # Recursively split the prefix if it's still long enough
-                            prefix_parts = self._split_compound_words(prefix, depth + 1, max_depth)
-                            components = prefix_parts + [suffix.capitalize()]
-                            logging.info(f"Split compound word '{word}' into: {components} (suffix match, depth={depth})")
-                            return components
-            
-            # Strategy 1b: Check for common word parts at the BEGINNING (with connectors)
-            # Sort by length descending to try longest matches first
-            for part in sorted(self.common_word_parts, key=len, reverse=True):
-                # Try with connectors at the beginning
-                for connector in connectors:
-                    search_pattern = part + connector
-                    if word_lower.startswith(search_pattern) and len(word_lower) > len(search_pattern):
-                        prefix = word[:len(part)]  # Get the common part without connector
-                        suffix_start = len(search_pattern)
-                        suffix = word[suffix_start:]
-                        
-                        # Only split if both parts are meaningful
-                        # At deeper levels, allow shorter prefixes (>= 3) to catch words like "Ski"
-                        min_prefix_len = 3 if depth > 0 else 4
-                        min_suffix_len = 3 if depth > 0 else 4
-                        if len(prefix) >= min_prefix_len and len(suffix) >= min_suffix_len:
-                            # Recursively split the suffix if it's still long enough
-                            suffix_parts = self._split_compound_words(suffix, depth + 1, max_depth)
-                            components = [prefix.capitalize()] + suffix_parts
-                            logging.info(f"Split compound word '{word}' into: {components} (prefix match, depth={depth})")
-                            return components
-                            suffix_parts = self._split_compound_words(suffix, depth + 1, max_depth)
-                            components = [prefix.capitalize()] + suffix_parts
-                            logging.info(f"Split compound word '{word}' into: {components} (prefix match, depth={depth})")
-                            return components
-            
-            # Strategy 2: Use spaCy for morphological analysis
-            if self.nlp:
-                doc = self.nlp(word)
-                if doc and len(doc) > 0:
-                    token = doc[0]
-                    # Check if spaCy identifies it as a compound noun
-                    if token.pos_ == "NOUN" and "-" in word:
-                        # Already hyphenated, just split on hyphen
-                        parts = word.split("-")
-                        if len(parts) > 1:
-                            components = [p.capitalize() for p in parts if len(p) > 2]
-                            if len(components) > 1:
-                                logging.info(f"Split hyphenated compound '{word}' into: {components}")
-                                return components
-            
-            # If no split found, return original word
+                    if right.startswith(connector) and len(right) - len(connector) >= min_component_len:
+                        adjusted_right = right[len(connector):]
+                        if is_meaningful(left) and is_meaningful(adjusted_right):
+                            return recurse_split(left, adjusted_right)
+
+                    if left.endswith(connector) and len(left) - len(connector) >= min_component_len:
+                        adjusted_left = left[:-len(connector)]
+                        if is_meaningful(adjusted_left) and is_meaningful(right):
+                            return recurse_split(adjusted_left, right)
+
+            # Handle hyphenated words without relying on spaCy analysis
+            if '-' in normalized:
+                parts = [p.strip() for p in normalized.split('-') if len(p.strip()) >= min_component_len]
+                if len(parts) > 1:
+                    components = capitalize_parts(parts)
+                    logging.info(f"Split hyphenated compound '{word}' into: {components}")
+                    return components
+
             return [word]
-                
+
         except Exception as e:
             logging.debug(f"Failed to split compound word '{word}': {e}")
             return [word]
     
     def _find_related_words(self, word, limit=3, min_similarity=0.6):
         """Find semantically related words using word embeddings.
-        
-        Example: 'Strasse' -> ['Verkehr', 'Autobahn', 'Fahrbahn']
         
         Args:
             word: Input word to find related terms for
@@ -1804,9 +1767,54 @@ Text: {text[:1200]}"""
         Yields:
             dict: Batches with {'batch': str, 'keywords': list, 'is_final': bool}
         """
-        # Step 1: Extract keywords from the input text
-        extracted_keywords = self._extract_keywords_from_text(query, max_keywords=5)
-        logging.info(f"Extracted keywords: {extracted_keywords}")
+        # Step 1: Build candidate keywords in a deterministic order
+        # 1) Raw query
+        # 2) Compound parts (if single word and splittable)
+        # 3) OpenAI-derived keywords from full expression (if available)
+        candidates = []
+        seen_candidate_keys = set()
+
+        def add_candidate(word):
+            if not word:
+                return
+            w = word.strip()
+            if not w:
+                return
+            key = w.lower()
+            if key in seen_candidate_keys:
+                return
+            seen_candidate_keys.add(key)
+            candidates.append(w)
+
+        query_clean = (query or '').strip()
+        add_candidate(query_clean)
+
+        # If it's a single token, try to split compounds and add the parts
+        if query_clean and ' ' not in query_clean:
+            parts = self._split_compound_words(query_clean)
+            if parts and len(parts) > 1:
+                for part in parts:
+                    add_candidate(part)
+
+        # Use OpenAI on the full expression to propose additional keywords
+        if query_clean:
+            ai_lang = query_lang.split('-')[0] if query_lang else 'de'
+            ai_keywords = self._extract_keywords_openai(query_clean, max_keywords=6, language=ai_lang)
+            if ai_keywords:
+                for kw in ai_keywords:
+                    add_candidate(kw)
+            else:
+                # Fallback to non-LLM extraction to avoid skipping results
+                saved_key = self.openai_api_key
+                self.openai_api_key = None
+                try:
+                    heuristic_keywords = self._extract_keywords_from_text(query_clean, max_keywords=5)
+                    for kw in heuristic_keywords:
+                        add_candidate(kw)
+                finally:
+                    self.openai_api_key = saved_key
+
+        logging.info(f"Candidate keywords for search: {candidates}")
         
         all_keywords = []
         seen_uris = set()
@@ -1827,7 +1835,7 @@ Text: {text[:1200]}"""
         
         # Phase 1: Search for exact matches WITHOUT synonyms
         exact_matches = []
-        for keyword in extracted_keywords:
+        for keyword in candidates:
             logging.info(f"Searching for exact matches: '{keyword}'")
             
             # Search each source without synonyms
@@ -1864,7 +1872,7 @@ Text: {text[:1200]}"""
         # Phase 2: Search with synonyms (if enabled)
         if include_synonyms:
             synonym_matches = []
-            for keyword in extracted_keywords:
+            for keyword in candidates:
                 logging.info(f"Searching with synonyms: '{keyword}'")
                 
                 # Search with synonyms enabled
