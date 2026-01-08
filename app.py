@@ -70,71 +70,235 @@ class KeywordGenerator:
         self.session.mount('https://', adapter)
         self.session.mount('http://', adapter)
         
-        # OpenAI API key for keyword extraction (optional)
+        # OpenAI API key for keyword extraction (required for AI-based generation)
         self.openai_api_key = os.environ.get('OPENAI_API_KEY')
-        # Initialize spaCy for lightweight tokenization (model optional)
-        self.nlp = None
-        try:
-            import spacy
-            # Try to load a lightweight spacy model if available, but don't fail if missing
-            try:
-                self.nlp = spacy.load("de_core_news_sm")
-                logging.info("spaCy model loaded for lightweight tokenization")
-            except OSError:
-                logging.info("spaCy model not available - will use regex-based extraction")
-        except ImportError:
-            logging.info("spacy not available - using regex-based extraction")
+        if not self.openai_api_key:
+            logging.warning("OPENAI_API_KEY not set - AI-based keyword generation will be unavailable")
 
-    def _extract_keywords_openai(self, text, max_keywords=6, language='de'):
-        """Extract keywords using OpenAI API (preferred method for better results).
+    def _detect_language(self, text):
+        """Detect the language of the input text using langdetect.
         
         Args:
-            text (str): Input text to analyze
-            max_keywords (int): Maximum number of keywords to return
-            language (str): Language code (de, en, fr, it)
+            text (str): Input text
             
         Returns:
-            list: Extracted keywords
+            str: Language code (de, en, fr, it) or 'de' as fallback
+        """
+        if not text or len(text.strip()) < 10:
+            return 'de'  # Default
+        
+        try:
+            from langdetect import detect
+            detected = detect(text)
+            # Map to supported languages
+            lang_map = {'de': 'de', 'en': 'en', 'fr': 'fr', 'it': 'it'}
+            return lang_map.get(detected, 'de')
+        except Exception as e:
+            logging.debug(f"Language detection failed: {e}")
+            return 'de'
+
+    def _generate_keywords_with_ai(self, text, max_keywords=8, language='de', publisher=None, themes=None):
+        """Generate keywords using OpenAI API with context.
+        
+        Args:
+            text (str): Input text (description)
+            max_keywords (int): Maximum number of keywords to return
+            language (str): Language code (de, en, fr, it)
+            publisher (str): Publisher/organization name
+            themes (list): List of thematic fields
+            
+        Returns:
+            list: Generated keywords (strings)
         """
         if not self.openai_api_key:
-            return None
+            logging.warning("OpenAI API key not available")
+            return []
             
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=self.openai_api_key)
+            import openai
+            logging.debug(f"Using openai package version {getattr(openai, '__version__', 'unknown')}")
+            client = openai.OpenAI(api_key=self.openai_api_key)
             
             lang_names = {'de': 'German', 'en': 'English', 'fr': 'French', 'it': 'Italian'}
             lang_name = lang_names.get(language, 'German')
             
-            prompt = f"""You are an expert taxonomist for public-sector and government data. Extract the {max_keywords} most relevant domain-specific keywords or key phrases from the following {lang_name} text.
-- Applicable domains include administration, infrastructure, economy, environment, health, mobility, energy, statistics, and public services.
-- Return a compact JSON array of unique keywords in {lang_name}.
-- Keep nouns/compounds (max 3 words each). Prioritize single words over compounds. No explanations, no numbering.
+            # Build context
+            context_parts = []
+            if publisher:
+                context_parts.append(f"Publisher: {publisher}")
+            if themes and isinstance(themes, list):
+                context_parts.append(f"Thematic fields: {', '.join(themes)}")
+            context = "\n".join(context_parts) if context_parts else ""
+            
+            prompt = f"""You are an expert taxonomist for Swiss public-sector and government data.
 
-Text: {text[:1200]}"""
+Task: Generate {max_keywords} relevant keywords and synonyms in {lang_name} for the following dataset.
+
+{context}
+
+Description: {text[:1500]}
+
+Requirements:
+- Return a JSON array of {max_keywords} unique keywords/phrases
+- Include both specific terms from the description AND thematically related synonyms
+- Focus on domains: administration, infrastructure, economy, environment, health, mobility, energy, statistics, public services
+- Prefer nouns and noun compounds (max 3 words each)
+- Return ONLY the JSON array, no explanations
+
+JSON array:"""
             
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=180
+                temperature=0.3,
+                max_tokens=250
             )
 
-            raw = response.choices[0].message.content.strip()
+            raw_content = response.choices[0].message.content.strip()
+
+            # Remove Markdown code fences like ```json ... ```
+            fenced_match = re.match(r"```[a-zA-Z0-9]*\s*(.*?)```", raw_content, re.DOTALL)
+            raw = fenced_match.group(1).strip() if fenced_match else raw_content
+
             keywords = []
 
-            # Prefer JSON array output; fall back to newline parsing if needed
+            # Parse JSON array
             try:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list):
                     keywords = [str(item).strip() for item in parsed if str(item).strip()]
             except Exception:
-                keywords = [line.strip() for line in raw.split('\n') if line.strip()]
+                # Fallback: split by lines
+                keywords = [line.strip().strip('"\'\\,') for line in raw.split('\n') if line.strip()]
+                keywords = [k for k in keywords if k and not k.startswith('[') and not k.startswith('{')]
 
-            return keywords[:max_keywords]
+            cleaned_keywords = []
+            for kw in keywords:
+                cleaned = kw.strip().strip("`\"'")
+                cleaned = cleaned.replace('```', '').strip()
+                if not cleaned:
+                    continue
+                if cleaned.startswith('[') or cleaned.startswith('{'):
+                    continue
+                lowered = cleaned.lower()
+                if 'json' in lowered or 'javascript' in lowered:
+                    continue
+                cleaned_keywords.append(cleaned)
+
+            logging.info(f"AI generated {len(cleaned_keywords)} keywords")
+            return cleaned_keywords[:max_keywords]
+            
         except Exception as e:
-            logging.debug(f"OpenAI keyword extraction failed: {e}")
-            return None
+            logging.error(f"OpenAI keyword generation failed: {e}", exc_info=True)
+            return []
+
+    def _extract_keywords_openai(self, text, max_keywords=8, language='de'):
+        """Legacy method for extracting keywords using OpenAI - redirects to _generate_keywords_with_ai.
+        
+        Args:
+            text (str): Input text
+            max_keywords (int): Maximum number of keywords
+            language (str): Language code
+            
+        Returns:
+            list: Extracted keywords
+        """
+        return self._generate_keywords_with_ai(text, max_keywords=max_keywords, language=language)
+    
+    def _extract_keywords_with_openai(self, text, max_keywords=10):
+        """Legacy method for extracting keywords with OpenAI - redirects to _generate_keywords_with_ai.
+        
+        Args:
+            text (str): Input text
+            max_keywords (int): Maximum number of keywords
+            
+        Returns:
+            list: Extracted keywords
+        """
+        return self._generate_keywords_with_ai(text, max_keywords=max_keywords, language='de')
+
+    def _extract_nouns_simple(self, text, max_nouns=10):
+        """Extract potential nouns using capitalization heuristics and frequency analysis."""
+        if not text:
+            return []
+
+        # Common stopwords (DE/FR/IT/EN) to avoid counting articles/pronouns as nouns
+        stopwords = {
+            'der', 'die', 'das', 'und', 'oder', 'sowie', 'mit', 'auf', 'für', 'von', 'den', 'im', 'in', 'am',
+            'ein', 'eine', 'einer', 'einem', 'ist', 'sind', 'war', 'waren', 'werden', 'wird', 'als', 'bei',
+            'nach', 'über', 'auch', 'sich', 'dass', 'nicht', 'kein', 'nur', 'aber', 'aus', 'zu', 'dem', 'des',
+            'le', 'la', 'les', 'un', 'une', 'de', 'du', 'des', 'et', 'ou', 'dans', 'sur', 'avec', 'pour',
+            'il', 'elle', 'ils', 'elles', 'ce', 'cette', 'ces', 'qui', 'que', 'dont', 'où',
+            'il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'una', 'uno', 'e', 'o', 'di', 'a', 'da', 'in', 'con', 'su', 'per',
+            'the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were',
+            'this', 'that', 'these', 'those', 'has', 'have', 'had', 'will', 'would', 'could', 'should', 'can', 'may', 'might'
+        }
+
+        def is_valid(token_lower, min_len=3):
+            return len(token_lower) >= min_len and token_lower not in stopwords
+
+        text_original = text
+        word_freq = {}
+        compound_spans = []
+        
+        # Articles to exclude at the start of compounds
+        articles = {'Der', 'Die', 'Das', 'Ein', 'Eine', 'Le', 'La', 'Les', 'Il', 'Lo', 'The', 'A', 'An'}
+
+        # Detect multi-word capitalized compounds (e.g., "Energie Versorgung Schweiz")
+        compound_pattern = r'\b(?:[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜa-zäöüß]+)?)(?:\s+(?:[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜa-zäöüß]+)?))+\b'
+        for match in re.finditer(compound_pattern, text_original):
+            compound = match.group().strip()
+            start, end = match.span()
+            
+            # Remove leading article if present
+            parts = compound.split()
+            if parts and parts[0] in articles:
+                parts = parts[1:]
+                compound = ' '.join(parts)
+            
+            if not compound:  # Skip if only article was present
+                continue
+                
+            compound_spans.append((start, end))
+
+            cleaned_compound = re.sub(r'[^a-zA-ZäöüÄÖÜàâéèêëïîôùûüÿçÀÂÉÈÊËÏÎÔÙÛÜŸÇ\s-]', '', compound)
+            compound_key = cleaned_compound.lower().strip()
+            if is_valid(compound_key, min_len=6):
+                word_freq[compound_key] = word_freq.get(compound_key, 0) + 1
+
+            # Count each component inside the compound as well
+            components = re.findall(r'[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜa-zäöüß]+)?', compound)
+            for comp in components:
+                comp_clean = re.sub(r'[^a-zA-ZäöüÄÖÜàâéèêëïîôùûüÿçÀÂÉÈÊËÏÎÔÙÛÜŸÇ-]', '', comp)
+                comp_key = comp_clean.lower().strip()
+                if is_valid(comp_key):
+                    word_freq[comp_key] = word_freq.get(comp_key, 0) + 1
+
+        # Detect standalone capitalized words (avoid counting ones already part of compounds twice)
+        single_pattern = r'\b[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜa-zäöüß]+)?\b'
+        for match in re.finditer(single_pattern, text_original):
+            start, end = match.span()
+            # Skip if this token is inside a previously counted compound span
+            if any(span_start <= start and end <= span_end for span_start, span_end in compound_spans):
+                continue
+
+            token = match.group().strip()
+            if token.isupper():
+                continue  # Ignore acronyms
+
+            token_clean = re.sub(r'[^a-zA-ZäöüÄÖÜàâéèêëïîôùûüÿçÀÂÉÈÊËÏÎÔÙÛÜŸÇ-]', '', token)
+            token_key = token_clean.lower()
+            if is_valid(token_key):
+                word_freq[token_key] = word_freq.get(token_key, 0) + 1
+
+        if not word_freq:
+            logging.info("No capitalized nouns detected in text")
+            return []
+
+        sorted_words = sorted(word_freq.items(), key=lambda x: (-x[1], -len(x[0])))
+        result = [word.title() for word, _ in sorted_words[:max_nouns]]
+        logging.info(f"Extracted {len(result)} most frequent nouns: {result}")
+        return result
 
     def _extract_keywords_from_text(self, text, max_keywords=5, nouns_only=False):
         """Extract representative keywords from free-form text.
@@ -272,68 +436,138 @@ Text: {text[:1200]}"""
 
         return unique
 
-    def _split_compound_words(self, word, depth=0, max_depth=2):
-        """Split potential compound words using language-agnostic heuristics."""
-        min_word_len = 8 if depth == 0 else 6
-        if len(word) < min_word_len or depth >= max_depth:
+    def _split_compound_words(self, word):
+        """Split compound words using OpenAI API (supports DE/FR/IT/EN)."""
+        if len(word) < 8:
             return [word]
-
+        
         try:
-            normalized = word.strip()
-            connectors = ['s', 'es', 'en', 'er', 'e', 'n']
-            vowels = set('aeiouäöüyAEIOUÄÖÜY')
-            min_component_len = 3 if depth > 0 else 4
+            import openai
+            
+            # Create OpenAI client
+            client = openai.OpenAI(api_key=self.openai_api_key)
+            
+            # Use OpenAI to split compound words intelligently
+            prompt = f"""Split this compound word into its meaningful component parts. Return ONLY the parts as a JSON array, nothing else.
 
-            def is_meaningful(part):
-                cleaned = part.strip('-')
-                if len(cleaned) < min_component_len:
-                    return False
-                if not cleaned.isalpha():
-                    return False
-                return any(ch in vowels for ch in cleaned.lower())
+Word: {word}
 
-            def capitalize_parts(parts):
-                return [p[:1].upper() + p[1:] if p else p for p in parts]
+Rules:
+- Only split if the word is clearly a compound (like German compounds)
+- Split into 2-3 meaningful parts maximum
+- Each part should be a complete, recognizable word
+- Remove connecting elements (like 's', 'es', 'en' in German)
+- Capitalize each part (for nouns)
+- If uncertain or the word is not a compound, return it as-is in a single-element array
 
-            word_len = len(normalized)
-            for split in range(min_component_len, word_len - min_component_len + 1):
-                left = normalized[:split]
-                right = normalized[split:]
+Examples:
+"Energieversorgung" -> ["Energie", "Versorgung"]
+"Wasserkraftwerk" -> ["Wasser", "Kraftwerk"]
+"Administration" -> ["Administration"]
+"Infrastructure" -> ["Infrastructure"]
 
-                def recurse_split(left_part, right_part):
-                    left_parts = self._split_compound_words(left_part, depth + 1, max_depth)
-                    right_parts = self._split_compound_words(right_part, depth + 1, max_depth)
-                    components = capitalize_parts(left_parts + right_parts)
-                    logging.info(f"Split compound word '{word}' into: {components} (depth={depth})")
-                    return components
+Return only a JSON array of strings, no explanation."""
 
-                if is_meaningful(left) and is_meaningful(right):
-                    return recurse_split(left, right)
-
-                for connector in connectors:
-                    if right.startswith(connector) and len(right) - len(connector) >= min_component_len:
-                        adjusted_right = right[len(connector):]
-                        if is_meaningful(left) and is_meaningful(adjusted_right):
-                            return recurse_split(left, adjusted_right)
-
-                    if left.endswith(connector) and len(left) - len(connector) >= min_component_len:
-                        adjusted_left = left[:-len(connector)]
-                        if is_meaningful(adjusted_left) and is_meaningful(right):
-                            return recurse_split(adjusted_left, right)
-
-            # Handle hyphenated words without relying on spaCy analysis
-            if '-' in normalized:
-                parts = [p.strip() for p in normalized.split('-') if len(p.strip()) >= min_component_len]
-                if len(parts) > 1:
-                    components = capitalize_parts(parts)
-                    logging.info(f"Split hyphenated compound '{word}' into: {components}")
-                    return components
-
-            return [word]
-
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=50
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # Strip markdown code fences if present
+            if result_text.startswith('```'):
+                lines = result_text.split('\n')
+                result_text = '\n'.join(lines[1:-1]) if len(lines) > 2 else result_text
+            
+            # Parse JSON response
+            parts = json.loads(result_text)
+            
+            # Validate: should be a list of strings
+            if isinstance(parts, list) and len(parts) > 0 and all(isinstance(p, str) for p in parts):
+                # If only one part returned, return original word
+                if len(parts) == 1:
+                    return [word]
+                logging.info(f"Split '{word}' -> {parts}")
+                return parts
+            else:
+                logging.warning(f"Invalid split result for '{word}': {parts}")
+                return [word]
+                
         except Exception as e:
-            logging.debug(f"Failed to split compound word '{word}': {e}")
+            logging.debug(f"Failed to split '{word}': {e}")
             return [word]
+    
+    def _generate_related_terms(self, keywords, language='de', max_related=5):
+        """Generate related terms and synonyms for given keywords using OpenAI.
+        
+        Args:
+            keywords (list): List of keywords to find related terms for
+            language (str): Language code (de, en, fr, it)
+            max_related (int): Maximum related terms to generate
+            
+        Returns:
+            list: Related terms and synonyms
+        """
+        if not keywords or not self.openai_api_key:
+            return []
+        
+        try:
+            import openai
+            
+            # Create OpenAI client
+            client = openai.OpenAI(api_key=self.openai_api_key)
+            
+            lang_names = {'de': 'German', 'en': 'English', 'fr': 'French', 'it': 'Italian'}
+            lang_name = lang_names.get(language, 'German')
+            
+            keywords_str = ', '.join(keywords[:5])  # Limit to first 5 keywords
+            
+            prompt = f"""Generate related terms and synonyms in {lang_name} for these keywords: {keywords_str}
+
+Requirements:
+- Generate {max_related} related terms including:
+  * Direct synonyms (e.g., "Strasse" → "Weg", "Verkehrsweg")
+  * Broader category terms (e.g., "Strasse" → "Mobilität", "Transport", "Infrastruktur")
+  * Specific subtypes (e.g., "Strasse" → "Autobahn", "Kantonsstrasse")
+  * Associated concepts in the same domain
+- Prefer single nouns or short compounds (1-2 words)
+- Focus on domains: infrastructure, mobility, transport, energy, environment, administration
+- Return ONLY a JSON array of {max_related} unique terms
+- No explanations, just the JSON array
+
+JSON array:"""
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+                max_tokens=150
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # Strip markdown code fences if present
+            if result_text.startswith('```'):
+                lines = result_text.split('\n')
+                result_text = '\n'.join(lines[1:-1]) if len(lines) > 2 else result_text
+            
+            # Parse JSON response
+            related = json.loads(result_text)
+            
+            if isinstance(related, list):
+                # Clean and filter
+                cleaned = [str(term).strip() for term in related if str(term).strip()]
+                logging.info(f"Generated {len(cleaned)} related terms for {keywords_str}")
+                return cleaned[:max_related]
+            else:
+                return []
+                
+        except Exception as e:
+            logging.debug(f"Failed to generate related terms: {e}")
+            return []
     
     def _find_related_words(self, word, limit=3, min_similarity=0.6):
         """Find semantically related words using word embeddings.
@@ -1768,6 +2002,210 @@ Text: {text[:1200]}"""
         
         return i14y_keywords
 
+    def _validate_keyword_in_sources(self, keyword, language='de'):
+        """Check if a keyword exists in TERMDAT, Wikidata, or GEMET.
+        
+        Args:
+            keyword (str): Keyword to validate
+            language (str): Language code
+            
+        Returns:
+            list: List of matching results from all sources
+        """
+        results = []
+        
+        try:
+            # Search TERMDAT (no synonyms, exact match priority)
+            termdat_results = self.search_termdat(keyword, language, include_synonyms=False, max_results=5)
+            for result in termdat_results:
+                result['search_keyword'] = keyword
+            results.extend(termdat_results)
+            
+            # Search GEMET
+            gemet_results = self.search_gemet(keyword)
+            for result in gemet_results:
+                result['search_keyword'] = keyword
+            results.extend(gemet_results)
+            
+            # Search Wikidata
+            wikidata_results = self.search_wikidata(keyword)
+            for result in wikidata_results:
+                result['search_keyword'] = keyword
+            results.extend(wikidata_results)
+            
+        except Exception as e:
+            logging.error(f"Error validating keyword '{keyword}': {e}")
+        
+        return results
+
+    def generate_keywords_workflow1(self, description, existing_keywords=None, publisher=None, themes=None, query_lang='de', include_synonyms=True):
+        """Generate keywords for Workflow 1 (I14Y integration).
+        
+        Args:
+            description (str): Dataset description
+            existing_keywords (list): List of existing I14Y keywords (dicts with 'name' and 'language')
+            publisher (str): Publisher organization name
+            themes (list): List of thematic fields
+            query_lang (str): Query language code
+            
+        Returns:
+            list: Combined keyword results
+        """
+        all_results = []
+        seen_uris = set()
+        
+        def add_unique(results_list):
+            """Add unique results based on URI"""
+            unique = []
+            for result in results_list:
+                uri = result.get('uri', '')
+                if uri and uri not in seen_uris:
+                    seen_uris.add(uri)
+                    unique.append(result)
+                    all_results.append(result)
+                elif not uri:
+                    unique.append(result)
+                    all_results.append(result)
+            return unique
+        
+        # Step 1: Process existing keywords
+        if existing_keywords:
+            logging.info(f"Processing {len(existing_keywords)} existing keywords")
+            for kw_obj in existing_keywords:
+                kw_text = kw_obj.get('name', '').strip()
+                kw_lang = kw_obj.get('language', query_lang)
+                if kw_text:
+                    matches = self._validate_keyword_in_sources(kw_text, kw_lang)
+                    for match in matches:
+                        match['source_type'] = 'existing_keyword'
+                    add_unique(matches)
+        
+        # Step 2: Generate new keywords with AI (only if include_synonyms is True)
+        if description and include_synonyms:
+            logging.info(f"Generating keywords with AI for description: {description[:100]}...")
+            detected_lang = self._detect_language(description)
+            ai_keywords = self._generate_keywords_with_ai(
+                description, 
+                max_keywords=8, 
+                language=detected_lang,
+                publisher=publisher,
+                themes=themes
+            )
+            
+            # Validate each AI-generated keyword
+            for kw in ai_keywords:
+                matches = self._validate_keyword_in_sources(kw, detected_lang)
+                for match in matches:
+                    match['source_type'] = 'ai_generated'
+                add_unique(matches)
+        
+        # Sort results: prioritize exact matches, then by source
+        sorted_results = self._apply_source_limits_and_sort(all_results, description or '')
+        
+        logging.info(f"Workflow 1 generated {len(sorted_results)} total keywords")
+        return sorted_results
+
+    def generate_keywords_workflow2(self, user_input, query_lang='de', include_synonyms=True):
+        """Generate keywords for Workflow 2 (direct search).
+        
+        Args:
+            user_input (str): User's search text/description
+            query_lang (str): Query language code
+            
+        Returns:
+            list: Combined keyword results
+        """
+        all_results = []
+        seen_uris = set()
+        
+        def add_unique(results_list):
+            """Add unique results based on URI"""
+            unique = []
+            for result in results_list:
+                uri = result.get('uri', '')
+                if uri and uri not in seen_uris:
+                    seen_uris.add(uri)
+                    unique.append(result)
+                    all_results.append(result)
+                elif not uri:
+                    unique.append(result)
+                    all_results.append(result)
+            return unique
+        
+        # Step 1: Extract nouns from input
+        nouns = self._extract_nouns_simple(user_input, max_nouns=10)
+        logging.info(f"Extracted {len(nouns)} nouns: {nouns}")
+        
+        # Validate each noun
+        unmatched_nouns = []
+        matched_compound_nouns = []  # Track matched compounds for part extraction
+        validated_parts = []  # Track validated compound parts for related term generation
+        
+        for noun in nouns:
+            matches = self._validate_keyword_in_sources(noun, query_lang)
+            if matches:
+                for match in matches:
+                    match['source_type'] = 'extracted_noun'
+                add_unique(matches)
+                # If this is a long word (likely compound), track it for part extraction
+                if len(noun) >= 12:
+                    matched_compound_nouns.append(noun)
+            else:
+                unmatched_nouns.append(noun)
+        
+        # Step 1b: Split compound words to enrich results with component parts (only if include_synonyms)
+        # Process both matched (to get parts) and unmatched (to find alternatives)
+        if include_synonyms:
+            compounds_to_split = list(set(matched_compound_nouns + unmatched_nouns))
+            
+            if compounds_to_split:
+                logging.info(f"Attempting to split {len(compounds_to_split)} compound nouns to extract parts.")
+                for noun in compounds_to_split:
+                    # Try to split the compound word
+                    parts = self._split_compound_words(noun)
+                    if len(parts) > 1:
+                        logging.info(f"Compound word '{noun}' split into: {parts}")
+                        # Validate each part
+                        for part in parts:
+                            part_matches = self._validate_keyword_in_sources(part, query_lang)
+                            if part_matches:
+                                for match in part_matches:
+                                    match['source_type'] = 'extracted_compound_part'
+                                add_unique(part_matches)
+                                validated_parts.append(part)  # Track for related term generation
+            
+            # Step 1c: Generate related terms/synonyms if we have validated parts
+            if validated_parts:
+                logging.info(f"Generating related terms for validated parts: {validated_parts}")
+                related_terms = self._generate_related_terms(validated_parts, language=query_lang, max_related=6)
+                for term in related_terms:
+                    term_matches = self._validate_keyword_in_sources(term, query_lang)
+                    for match in term_matches:
+                        match['source_type'] = 'related_term'
+                    add_unique(term_matches)
+        
+        # Step 2: Send full input to AI (only if include_synonyms is True)
+        if include_synonyms:
+            detected_lang = self._detect_language(user_input)
+            ai_keywords = self._generate_keywords_with_ai(
+                user_input,
+                max_keywords=8,
+                language=detected_lang
+            )
+            
+            # Validate each AI keyword
+            for kw in ai_keywords:
+                matches = self._validate_keyword_in_sources(kw, detected_lang)
+                for match in matches:
+                    match['source_type'] = 'ai_generated'
+                add_unique(matches)
+        
+        # Sort results
+        sorted_results = self._apply_source_limits_and_sort(all_results, user_input)
+        
+        logging.info(f"Workflow 2 generated {len(sorted_results)} total keywords")
+        return sorted_results
+
     def generate_keywords_streaming(self, query, query_lang='de', include_synonyms=True):
         """Generate keywords with streaming support - yields results as they become available.
         
@@ -2311,10 +2749,10 @@ def refine_step4():
 
 @app.route('/search-stream', methods=['POST'])
 def search_keywords_stream():
-    """Streaming endpoint that returns results progressively"""
+    """Streaming endpoint for Workflow 2 (direct search)"""
     query = request.json.get('query', '').strip()
     query_lang = request.json.get('lang', 'de').strip().lower()
-    include_synonyms = request.json.get('include_synonyms', True)
+    include_synonyms = request.json.get('include_synonyms', True)  # Default to True
     
     if not query:
         return jsonify({'error': 'Query is required'}), 400
@@ -2322,32 +2760,32 @@ def search_keywords_stream():
     def generate():
         """Generator function for Server-Sent Events"""
         try:
-            for batch_data in keyword_generator.generate_keywords_streaming(query, query_lang, include_synonyms):
-                # Sanitize keywords for JSON
-                sanitized = []
-                for kw in batch_data['keywords']:
-                    sanitized.append({
-                        'source': kw.get('source', ''),
-                        'multilingual_label': kw.get('multilingual_label', {}),
-                        'uri': kw.get('uri', ''),
-                        'description': kw.get('description', ''),
-                        'entry_id': kw.get('entry_id', ''),
-                        'query_lang': kw.get('query_lang', query_lang),
-                        'available_languages': kw.get('available_languages', []),
-                        'is_synonym_result': kw.get('is_synonym_result', False),
-                        'found_via_query': kw.get('found_via_query', query),
-                        'extracted_from': kw.get('extracted_from'),
-                        'search_keyword': kw.get('search_keyword')
-                    })
-                
-                # Send as Server-Sent Event
-                result = {
-                    'batch': batch_data['batch'],
-                    'keywords': sanitized,
-                    'total': len(sanitized),
-                    'is_final': batch_data['is_final']
-                }
-                yield f"data: {json.dumps(result)}\n\n"
+            # Use new Workflow 2
+            keywords = keyword_generator.generate_keywords_workflow2(query, query_lang, include_synonyms)
+            
+            # Sanitize keywords for JSON
+            sanitized = []
+            for kw in keywords:
+                sanitized.append({
+                    'source': kw.get('source', ''),
+                    'multilingual_label': kw.get('multilingual_label', {}),
+                    'uri': kw.get('uri', ''),
+                    'description': kw.get('description', ''),
+                    'entry_id': kw.get('entry_id', ''),
+                    'query_lang': kw.get('query_lang', query_lang),
+                    'available_languages': kw.get('available_languages', []),
+                    'search_keyword': kw.get('search_keyword'),
+                    'source_type': kw.get('source_type', '')
+                })
+            
+            # Send as single batch (final)
+            result = {
+                'batch': 'workflow2_results',
+                'keywords': sanitized,
+                'total': len(sanitized),
+                'is_final': True
+            }
+            yield f"data: {json.dumps(result)}\n\n"
         except Exception as e:
             logging.error(f"Streaming error: {e}", exc_info=True)
             yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
@@ -2458,19 +2896,42 @@ def search_keywords():
 
 @app.route('/generate-progressive-keywords', methods=['POST'])
 def generate_progressive_keywords():
-    """Generate keywords using improved progressive algorithm for workflow 1"""
+    """Generate keywords for Workflow 1 (I14Y integration)"""
     data = request.json
     i14y_item = data.get('i14y_item', {})
     query_lang = data.get('lang', 'de').strip().lower()
+    include_synonyms = data.get('include_synonyms', True)  # Default to True
     
     if not i14y_item:
         return jsonify({'error': 'I14Y item data is required'}), 400
     
     try:
-        logging.info(f"Progressive keyword generation for item: {i14y_item.get('id', 'unknown')}")
+        logging.info(f"Workflow 1 keyword generation for item: {i14y_item.get('id', 'unknown')}")
         
-        # Generate keywords using progressive algorithm
-        keywords = keyword_generator.generate_keywords_progressive(i14y_item, query_lang)
+        # Extract data from I14Y item
+        description_field = i14y_item.get('description', {})
+        if isinstance(description_field, dict):
+            description = description_field.get('de', '') or description_field.get('en', '') or description_field.get('fr', '')
+        else:
+            description = str(description_field) if description_field else ''
+        
+        existing_keywords = i14y_item.get('keywords', [])
+        
+        publisher_field = i14y_item.get('publisher', {})
+        publisher = publisher_field.get('name', '') if isinstance(publisher_field, dict) else ''
+        
+        themes_field = i14y_item.get('themes', [])
+        themes = [t.get('name', '') for t in themes_field if isinstance(t, dict)] if isinstance(themes_field, list) else []
+        
+        # Generate keywords using Workflow 1
+        keywords = keyword_generator.generate_keywords_workflow1(
+            description=description,
+            existing_keywords=existing_keywords,
+            publisher=publisher,
+            themes=themes,
+            query_lang=query_lang,
+            include_synonyms=include_synonyms
+        )
         
         # Convert to I14Y format
         i14y_keywords = keyword_generator._convert_to_i14y_format(keywords)
@@ -2487,6 +2948,7 @@ def generate_progressive_keywords():
                     'entry_id': kw.get('entry_id', ''),
                     'query_lang': kw.get('query_lang', query_lang),
                     'available_languages': kw.get('available_languages', list(kw.get('multilingual_label', {}).keys())),
+                    'source_type': kw.get('source_type', '')
                 }
                 sanitized_keywords.append(sanitized_kw)
             except Exception as e:
@@ -2507,7 +2969,7 @@ def generate_progressive_keywords():
         return jsonify(result)
         
     except Exception as e:
-        logging.error(f"Progressive keyword generation error: {e}", exc_info=True)
+        logging.error(f"Workflow 1 keyword generation error: {e}", exc_info=True)
         return jsonify({'error': f'Error generating keywords: {str(e)}'}), 500
 
 @app.route('/upload')
