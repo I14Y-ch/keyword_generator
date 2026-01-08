@@ -3681,4 +3681,5 @@ def get_i14y_organisations():
         return jsonify({'error': f'Error fetching organisations: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8080)
+    # Development mode only - use gunicorn in production
+    app.run(debug=False, host='0.0.0.0', port=8080)
