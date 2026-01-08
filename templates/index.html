@@ -3,216 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DCAT-AP CH Keyword Generator</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-    <style>
-        .info-icon {
-            display: inline-block;
-            margin-left: 8px;
-            width: 18px;
-            height: 18px;
-            background-color: #007acc;
-            color: white;
-            border-radius: 50%;
-            text-align: center;
-            line-height: 18px;
-            font-size: 12px;
-            cursor: pointer;
-            vertical-align: middle;
-        }
-        
-        .info-icon:hover {
-            background-color: #005999;
-        }
-        
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5);
-            align-items: center; /* center content vertically */
-            justify-content: center; /* center content horizontally */
-            overflow: auto; /* allow scrolling for tall content */
-        }
-        
-        .modal-content {
-            background-color: #fefefe;
-            margin: 0 20px;
-            padding: 20px;
-            border-radius: 8px;
-            width: 80%;
-            max-width: 600px;
-            max-height: 90vh;
-            overflow-y: auto;
-            position: relative;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-        }
-        
-        .modal-close {
-            color: #aaa;
-            float: right;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-            line-height: 1;
-        }
-        
-        .modal-close:hover {
-            color: #000;
-        }
-        
-        .modal h3 {
-            margin-top: 0;
-            color: #333;
-        }
-        
-        .modal ol {
-            padding-left: 20px;
-        }
-        
-        .modal li {
-            margin-bottom: 10px;
-        }
-        
-        .modal a {
-            color: #007acc;
-            text-decoration: none;
-        }
-        
-        .modal a:hover {
-            text-decoration: underline;
-        }
-
-        .lang-tag {
-            display: inline-block;
-            background-color: #e0e0e0;
-            color: #333;
-            border-radius: 4px;
-            padding: 2px 5px;
-            margin-right: 5px;
-            font-size: 10px;
-            font-weight: bold;
-        }
-        
-        .lang-tag.current {
-            background-color: #007acc;
-            color: white;
-        }
-        
-        .language-indicators {
-            margin-bottom: 8px;
-        }
-        
-        .synonym-result {
-            border-left: 3px solid #28a745 !important;
-        }
-        
-        .synonym-indicator {
-            margin-bottom: 8px;
-        }
-
-        /* Status message area shown during search phases */
-        .status {
-            margin: 15px 0;
-            padding: 12px 16px;
-            font-size: 14px;
-            color: #2c3e50;
-            background: linear-gradient(135deg, #e8f4fd 0%, #f0f9ff 100%);
-            border: 1px solid #bee3f8;
-            border-radius: 8px;
-            border-left: 4px solid #3182ce;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            animation: statusSlideIn 0.3s ease-out;
-        }
-        
-        .status::before {
-            content: "🔍";
-            margin-right: 8px;
-            font-size: 16px;
-        }
-        
-        .status.synonyms::before {
-            content: "🔗";
-        }
-        
-        .status.termdat::before {
-            content: "📚";
-        }
-        
-        .status.wikidata::before {
-            content: "🌐";
-        }
-        
-        .status.gemet::before {
-            content: "🌿";
-        }
-        
-        .status.rendering::before {
-            content: "✨";
-        }
-        
-        @keyframes statusSlideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .status small {
-            display: block;
-            color: #666;
-            margin-top: 4px;
-            font-size: 12px;
-        }
-    </style>
+    <title>I14Y Keyword Generator</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>I14Y Keyword Generator</h1>
-            <p>Generate compliant keywords following DCAT-AP CH specifications using TERMDAT, GEMET, and Wikidata 
-                <span class="info-icon" onclick="openModal()" title="Show keyword priority cascade">i</span>
-            </p>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
+                </div>
+            </div>
         </div>
+    </header>
+    
+    <main>
+        <div class="container">
+            <div class="page-header">
+                <h1>Keyword Generator</h1>
+                <p class="page-lead">Generate compliant keywords following DCAT-AP CH specifications using TERMDAT, GEMET, and Wikidata 
+                    <span class="info-icon" onclick="openModal()" title="Show keyword priority cascade">i</span>
+                </p>
+            </div>
 
-        <div class="search-section">
+        <div class="workflow-section">
+            <h2 class="section-title">Generate Keywords</h2>
+            <p class="section-description">Enter a keyword or paste a longer text description. Keywords will be searched in TERMDAT, GEMET, and Wikidata vocabularies. Compound words (e.g., "Umfahrungsstrasse") will be automatically decomposed and analyzed to find related terms.</p>
+            
             <div class="search-container">
-                <input type="text" id="searchInput" class="search-input" 
-                       placeholder="Enter a term to generate keywords..." />
-                <div class="search-options" style="margin: 10px 0;">
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
+                <textarea id="searchInput" class="search-input" rows="3"
+                       placeholder="Enter a keyword or paste a longer description (multiple sentences will be analyzed to extract relevant keywords)..." 
+                       style="resize: vertical; min-height: 60px; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px;"></textarea>
+                <div class="search-options">
+                    <label>
                         <input type="checkbox" id="includeSynonyms" checked>
-                        <span>Include synonyms and related terms</span>
-                        <span id="synonymInfoBtn" class="info-icon" title="Learn about synonym support" style="font-size: 10px; width: 14px; height: 14px; line-height: 14px; cursor: pointer;">?</span>
+                        <span>Include synonyms, related terms, and compound word analysis</span>
+                        <span id="synonymInfoBtn" class="info-icon" title="To extract synonyms, related terms, and analyze compound words, enable this option. The content may be sent to external services like OpenAI for processing.">?</span>
                     </label>
                 </div>
-                <div class="button-group">
-                    <button id="searchBtn" class="search-btn">Generate Keywords</button>
-                    <button id="showJsonBtn" class="search-btn" disabled>Show JSON</button>
-                    <button id="connectI14YBtn" class="search-btn secondary" disabled>Upload to I14Y</button>
+                <div class="button-group" style="display: flex; gap: 10px;">
+                    <button id="searchBtn" class="search-btn" style="padding: 12px 30px;">Generate Keywords</button>
+                    <button id="showJsonBtn" class="search-btn" style="padding: 12px 30px;" disabled>Show JSON</button>
+                    <button id="connectI14YBtn" class="search-btn secondary" style="padding: 12px 30px;" disabled>Upload to I14Y</button>
                 </div>
             </div>
         </div>
+        
+        <!-- Extracted keywords info section -->
+        <div id="extractedKeywordsSection" class="workflow-section" style="display: none; background: #e8f4fd; border-left: 4px solid #3182ce;">
+            <h3 style="margin: 0 0 10px 0; color: #2c3e50; font-size: 1.1em; font-weight: 600;">📋 Extracted Keywords</h3>
+            <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">The following keywords were extracted from your description and searched in the vocabularies:</p>
+            <div id="extractedKeywordsList" style="display: flex; gap: 8px; flex-wrap: wrap;"></div>
+        </div>
 
-        <div class="results-section" id="resultsSection" style="display: none;">
-            <div class="results-header">
-                <h2>Generated Keywords</h2>
-                <span class="results-count" id="resultsCount">0 keywords found</span>
+        <div class="workflow-section" id="resultsSection" style="display: none;">
+            <div class="results-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 class="section-title" style="margin: 0;">Generated Keywords</h2>
+                <span class="results-count" id="resultsCount" style="color: #666; font-size: 0.9em;">0 keywords found</span>
             </div>
             <div id="keywordGrid" class="keyword-grid"></div>
-            <div class="button-container" style="display: flex; gap: 15px; margin-top: 20px;">
-            </div>
         </div>
 
         <div id="loading" class="loading" style="display: none;">
@@ -224,11 +79,25 @@
         <div id="statusMessage" class="status" style="display:none;"></div>
 
         <div id="error" class="error" style="display: none;"></div>
-
-        <div id="searchHistorySection" class="search-section" style="display: none;">
-            <h3>Search History</h3>
-            <ul id="searchHistoryList" style="list-style-type: none; padding: 0;"></ul>
         </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
 
         <!-- Modal for DCAT-AP CH Information -->
         <div id="dcatModal" class="modal">
@@ -254,12 +123,14 @@
                 <h3>Synonym Discovery & Related Terms</h3>
                 <p>This tool dynamically discovers synonyms and related terms using multiple intelligent sources:</p>
                 <ul>
-                    <li><strong>OpenAI (ChatGPT)</strong>: Primary source using GPT-3.5-turbo to generate contextually relevant German synonyms and related terms, validated against authoritative vocabularies.</li>
+                    <li><strong>Compound Word Analysis</strong>: German compound words (e.g., "Umfahrungsstrasse" → "Umfahrung" + "Strasse") are automatically decomposed using NLP to find keywords for each component part.</li>
+                    <li><strong>Related Term Discovery</strong>: For each keyword component, the system finds semantically related broader terms (e.g., "Strasse" → "Verkehr", "Infrastruktur").</li>
+                    <li><strong>OpenAI (ChatGPT)</strong>: Primary source using GPT-3.5-turbo to generate contextually relevant German synonyms, related terms, and to help decompose compound words.</li>
                     <li><strong>Wikidata relationships</strong>: Uses semantic properties like "subclass of", "part of" and aliases to find related concepts from the world's largest linked-data knowledge base.</li>
                     <li><strong>TERMDAT analysis</strong>: Finds related terms in the same Swiss Federal terminology collections and analyzes definitions for semantic similarity.</li>
                     <li><strong>Quality validation</strong>: All AI-generated candidates are verified against Wikidata and TERMDAT before inclusion; fallback to linked-data discovery if AI is unavailable.</li>
                 </ul>
-                <p><strong>Process:</strong> The system first asks ChatGPT for synonyms, validates them against authoritative sources, and falls back to semantic analysis if needed. Results discovered via synonym search are marked in the UI (green indicator).</p>
+                <p><strong>Process:</strong> The system first decomposes compound words, asks ChatGPT for synonyms and related terms for each component, validates them against authoritative sources, and falls back to semantic analysis if needed. Results discovered via synonym search or compound word analysis are marked in the UI (green/blue indicators).</p>
             </div>
         </div>
     </div>
@@ -305,6 +176,8 @@
         const selectedKeywords = new Set();
         const searchHistory = [];
 
+
+
         // Attach click handler for synonym info button (robust fallback)
         const synonymInfoBtn = document.getElementById('synonymInfoBtn');
         if (synonymInfoBtn) {
@@ -327,30 +200,46 @@
         });
 
         showJsonBtn.addEventListener('click', () => {
-            const keywordsArray = Array.from(selectedKeywords).map(keyword => {
-                // Check if keyword has multilingual_label structure
+            // Format keywords exactly as they will be sent to the API
+            const formattedKeywords = Array.from(selectedKeywords).map(keyword => {
+                const keyword_obj = {
+                    label: {},
+                    uri: keyword.uri || ''
+                };
+                
+                // Handle multilingual_label (from TERMDAT/GEMET/Wikidata)
                 if (keyword.multilingual_label) {
-                    // Use the actual multilingual labels
-                    const multilingualKeyword = {};
-                    ['de', 'fr', 'it', 'en'].forEach(lang => {
-                        if (keyword.multilingual_label[lang]) {
-                            multilingualKeyword[lang] = keyword.multilingual_label[lang];
-                        }
-                    });
-                    return multilingualKeyword;
-                } else {
-                    // Fallback for old format
-                    return {
-                        de: keyword.label || keyword.de,
-                        en: keyword.label || keyword.en,
-                        fr: keyword.label || keyword.fr,
-                        it: keyword.label || keyword.it
+                    keyword_obj.label = {
+                        de: keyword.multilingual_label.de || '',
+                        en: keyword.multilingual_label.en || '',
+                        fr: keyword.multilingual_label.fr || '',
+                        it: keyword.multilingual_label.it || '',
+                        rm: keyword.multilingual_label.rm || ''
                     };
                 }
+                // Handle plain label string (fallback)
+                else if (keyword.label) {
+                    const label_text = keyword.label;
+                    keyword_obj.label = {
+                        de: label_text,
+                        en: label_text,
+                        fr: label_text,
+                        it: label_text,
+                        rm: label_text
+                    };
+                }
+                
+                return keyword_obj;
             });
 
-            const jsonOutput = JSON.stringify({ keywords: keywordsArray }, null, 2);
-            alert(jsonOutput);
+            // Create the JSON structure
+            const jsonData = {
+                keywords: formattedKeywords
+            };
+            
+            const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            window.open(url, '_blank');
         });
 
         async function performSearch() {
@@ -368,42 +257,66 @@
 
             try {
                 const includeSynonyms = document.getElementById('includeSynonyms').checked;
-                // Inform the user whether synonyms will be included
-                if (includeSynonyms) {
-                    setStatus('Looking for synonyms and related terms...', 'synonyms');
+                const wordCount = query.split(/\s+/).filter(w => w.length > 0).length;
+                
+                // Determine workflow based on word count and synonyms setting
+                let useDirectSearch = wordCount < 6;
+                
+                if (useDirectSearch && !includeSynonyms) {
+                    // Direct search: Query TERMDAT, GEMET, Wikidata with entered words
+                    setStatus(`Searching vocabularies with ${wordCount} keyword(s)...`, 'default');
+                } else if (useDirectSearch && includeSynonyms) {
+                    // Use NLP/AI to extract/expand keywords, then search
+                    setStatus('Extracting keywords and finding synonyms...', 'synonyms');
+                } else if (!useDirectSearch && includeSynonyms) {
+                    // Long text: extract keywords with NLP/AI, then search
+                    setStatus('Analyzing text to extract keywords...', 'synonyms');
                 } else {
-                    setStatus('Skipping synonym expansion', 'default');
+                    // Long text without synonyms: extract keywords, then direct search
+                    setStatus('Extracting keywords from text...', 'default');
                 }
 
                 // Next stage: querying backend services
-                setStatus('Querying TERMDAT, Wikidata, and GEMET...', 'termdat');
-                const response = await fetch('/search', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ 
-                        query: query,
-                        lang: 'de',  // Default to German as query language
-                        include_synonyms: includeSynonyms
-                    })
-                });
+                setStatus('Querying TERMDAT, GEMET, and Wikidata...', 'termdat');
+                
+                // Use streaming API for progressive results
+                const useStreaming = true;
+                
+                if (useStreaming) {
+                    // Use streaming for progressive results
+                    await performStreamingSearch(query, includeSynonyms);
+                } else {
+                    // Fallback to regular fetch
+                    const response = await fetch('/search', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ 
+                            query: query,
+                            lang: 'de',  // Default to German as query language
+                            include_synonyms: includeSynonyms,
+                            direct_search: useDirectSearch && !includeSynonyms
+                        })
+                    });
 
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error('Server response error:', response.status, errorText);
-                    throw new Error(`Server error (${response.status}): ${errorText}`);
-                }
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.error('Server response error:', response.status, errorText);
+                        throw new Error(`Server error (${response.status}): ${errorText}`);
+                    }
 
-                try {
-                    const data = await response.json();
-                    setStatus('Rendering results...', 'rendering');
-                    displayResults(data);
-                    updateSearchHistory(query);
-                } catch (jsonError) {
-                    console.error('JSON parsing error:', jsonError);
-                    throw new Error('Failed to parse server response');
+                    try {
+                        const data = await response.json();
+                        setStatus('Rendering results...', 'rendering');
+                        displayResults(data);
+                        updateSearchHistory(query);
+                    } catch (jsonError) {
+                        console.error('JSON parsing error:', jsonError);
+                        throw new Error('Failed to parse server response');
+                    }
                 }
+                
             } catch (err) {
                 console.error('Search error:', err);
                 showError(err.message || 'Search failed. Please try again.');
@@ -412,6 +325,89 @@
                 // Clear the status after a short delay so users can see the final state
                 setTimeout(() => clearStatus(), 1200);
             }
+        }
+        
+        async function performStreamingSearch(query, includeSynonyms) {
+            let allKeywords = [];
+            let isFirstBatch = true;
+            
+            return new Promise((resolve, reject) => {
+                fetch('/search-stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        query: query,
+                        lang: 'de',
+                        include_synonyms: includeSynonyms
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Server error (${response.status})`);
+                    }
+                    
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    
+                    function processChunk() {
+                        reader.read().then(({ done, value }) => {
+                            if (done) {
+                                updateSearchHistory(query);
+                                resolve();
+                                return;
+                            }
+                            
+                            buffer += decoder.decode(value, { stream: true });
+                            const lines = buffer.split('\n\n');
+                            buffer = lines.pop(); // Keep incomplete line in buffer
+                            
+                            for (const line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    try {
+                                        const data = JSON.parse(line.substring(6));
+                                        
+                                        console.log('Received batch:', data.batch, 'Keywords:', data.total);
+                                        
+                                        if (data.error) {
+                                            reject(new Error(data.error));
+                                            return;
+                                        }
+                                        
+                                        if (isFirstBatch) {
+                                            console.log('Displaying first batch - exact matches');
+                                            setStatus('Showing exact matches...', 'success');
+                                            isFirstBatch = false;
+                                            showResults();
+                                        } else if (data.batch === 'with_synonyms') {
+                                            console.log('Updating with synonym results');
+                                            setStatus('Adding synonym-based results...', 'synonyms');
+                                        }
+                                        
+                                        // Display progressive results
+                                        displayResults({
+                                            query: query,
+                                            keywords: data.keywords,
+                                            total: data.total,
+                                            is_final: data.is_final
+                                        });
+                                        
+                                    } catch (e) {
+                                        console.error('Error parsing SSE data:', e, 'Line:', line);
+                                    }
+                                }
+                            }
+                            
+                            processChunk();
+                        }).catch(reject);
+                    }
+                    
+                    processChunk();
+                })
+                .catch(reject);
+            });
         }
 
         window.toggleKeywordSelection = function(cardId, keywordData) {
@@ -459,6 +455,19 @@
             if (!data || !data.keywords) {
                 showError('Invalid response data');
                 return;
+            }
+
+            // Display extracted keywords if present
+            const extractedSection = document.getElementById('extractedKeywordsSection');
+            const extractedList = document.getElementById('extractedKeywordsList');
+            
+            if (data.extracted_keywords && data.extracted_keywords.length > 1) {
+                extractedList.innerHTML = data.extracted_keywords
+                    .map(kw => `<span style="background: #3182ce; color: white; padding: 6px 12px; border-radius: 16px; font-size: 14px; font-weight: 500;">${kw}</span>`)
+                    .join('');
+                extractedSection.style.display = 'block';
+            } else {
+                extractedSection.style.display = 'none';
             }
 
             // Update results count to include synonym information
@@ -519,10 +528,21 @@
                             </div>`;
                         }
                         
+                        // Add extracted keyword indicator if this result was found via text extraction
+                        let extractedIndicator = '';
+                        if (keyword.search_keyword && data.extracted_keywords && data.extracted_keywords.length > 1) {
+                            extractedIndicator = `<div class="extracted-indicator" title="Extracted from your description">
+                                <span style="background: #3182ce; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
+                                    🔍 "${keyword.search_keyword}"
+                                </span>
+                            </div>`;
+                        }
+                        
                         return `
                             <div class="keyword-card ${keyword.is_synonym_result ? 'synonym-result' : ''}" id="keyword-${index}" onclick="toggleKeywordSelection('keyword-${index}', window.keywordsData[${index}])">
-                                <div class="keyword-source ${keyword.source.toLowerCase()}">${keyword.source}</div>
+                                <div class="keyword-source source-${keyword.source.toLowerCase()}">${keyword.source}</div>
                                 <div class="keyword-label">${displayLabel}</div>
+                                ${extractedIndicator}
                                 ${synonymIndicator}
                                 ${languageIndicators}
                                 ${keyword.description ? `<div class="keyword-description">${keyword.description}</div>` : ''}
@@ -574,12 +594,9 @@
             error.style.display = 'none';
         }
  
+        // Search history is intentionally disabled
         function updateSearchHistory(query) {
-            searchHistory.push(query);
-            const historyItem = document.createElement('li');
-            historyItem.textContent = query;
-            searchHistoryList.appendChild(historyItem);
-            searchHistorySection.style.display = 'block';
+            return;
         }
  
         // Initialize button states - both JSON and Upload buttons disabled until search
@@ -617,9 +634,17 @@
             localStorage.setItem('selectedKeywords', JSON.stringify(keywordsArray));
             localStorage.setItem('i14yKeywords', JSON.stringify(i14yKeywordsArray));
             
+            // Store the GUID if one was selected from I14Y
+            if (window.selectedI14YGuid) {
+                localStorage.setItem('selectedI14YGuid', window.selectedI14YGuid);
+            }
+            
             // Debug: Log what was saved
             console.log('Saved keywords to localStorage:', keywordsArray);
             console.log('Saved I14Y keywords to localStorage:', i14yKeywordsArray);
+            if (window.selectedI14YGuid) {
+                console.log('Saved I14Y GUID to localStorage:', window.selectedI14YGuid);
+            }
             
             // Redirect directly to upload page
             window.location.href = '/upload';

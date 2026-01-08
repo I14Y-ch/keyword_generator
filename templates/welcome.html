@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>I14Y Keyword Generator - Welcome</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                    <h1 class="header-title">I14Y Tools</h1>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
+        <div class="container">
+            <div class="page-header">
+                <h1>Keyword Generator</h1>
+                <p class="page-lead">Choose your workflow to generate DCAT-AP CH compliant keywords for entries on the interoperability platform I14Y. </p>
+            </div>
+            
+            <div class="workflow-container">
+                <!-- Use Case 1: Refine existing I14Y keywords -->
+                <div class="workflow-card" onclick="window.location.href='{{ url_for('refine') }}'">
+                    <h2 class="workflow-title">Refine Existing I14Y Entries</h2>
+                    <p class="workflow-description">
+                        You have a dataset, dataservice, public service, or concept description already published on I14Y, but need to improve its keywords.
+                    </p>
+                    <ul class="workflow-features">
+                        <li>Search for existing I14Y items</li>
+                        <li>Load current description and keywords</li>
+                        <li>Generate improved keyword suggestions</li>
+                        <li>Update keywords directly on I14Y</li>
+                    </ul>
+                    <button class="workflow-button">Refine I14Y Item</button>
+                </div>
+                
+                <!-- Use Case 2: Start from scratch -->
+                <div class="workflow-card" onclick="window.location.href='{{ url_for('index') }}'">
+                    <h2 class="workflow-title">Generate from Description</h2>
+                    <p class="workflow-description">
+                        You're starting from scratch with just a description and want to produce keywords for your item.
+                    </p>
+                    <ul class="workflow-features">
+                        <li>Enter or paste any description</li>
+                        <li>AI-powered keyword extraction</li>
+                        <li>Multi-vocabulary search (TERMDAT, GEMET, Wikidata)</li>
+                        <li>Export as JSON or upload to I14Y</li>
+                    </ul>
+                    <button class="workflow-button">Generate Keywords</button>
+                </div>
+            </div>
+        </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

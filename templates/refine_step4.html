@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Update Keywords on I14Y - Refine Keywords</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
+        <div class="container">
+            <a href="{{ url_for('refine_step3') }}" class="back-link">Back to Arrangement</a>
+            
+            <div class="page-header">
+                <h1>Update Keywords on I14Y</h1>
+                <p class="page-lead">Confirm and execute the keyword update</p>
+            </div>
+            
+            <div class="step-indicator-bar">
+                <div class="step-progress" style="width: 100%;"></div>
+                <span class="step-text">Step 4 of 4: Update I14Y</span>
+            </div>
+            
+            <div class="workflow-section">
+                <h2 class="section-title">🚀 Confirm Update</h2>
+                
+                <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+                    <p style="margin: 0; font-size: 0.9em; color: #92400e;">
+                        ℹ️ <strong>API Token Required:</strong> You need a valid I14Y Partner API token (Bearer token) to update keywords. 
+                        The token should start with "Bearer " followed by your JWT token.
+                    </p>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <label for="apiToken" style="display: block; margin-bottom: 8px; font-weight: 600; color: #2c3e50;">
+                        API Token:
+                    </label>
+                    <input type="password" id="apiToken" 
+                           placeholder="Bearer eyJraWQiOi..." 
+                           style="width: 100%; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px; font-family: monospace; font-size: 0.9em;" />
+                    <p style="margin: 5px 0 0 0; font-size: 0.85em; color: #666;">
+                        Example: Bearer eyJraWQiOiJjNjNkMDkzNi1hYjU4LTQ1...
+                    </p>
+                </div>
+                
+                <div id="updateSummary" style="background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #e2e8f0;">
+                    <h4 style="margin-top: 0; color: #2c3e50;">Update Summary:</h4>
+                    <ul style="margin: 10px 0; padding-left: 20px; line-height: 1.8;">
+                        <li><strong>Object:</strong> <span id="summaryObjectTitle">-</span></li>
+                        <li><strong>Type:</strong> <span id="summaryObjectType">-</span></li>
+                        <li><strong>ID:</strong> <span id="summaryObjectId" style="font-family: monospace; font-size: 0.9em;">-</span></li>
+                        <li><strong>Keywords to update:</strong> <span id="summaryKeywordCount">0</span></li>
+                    </ul>
+                </div>
+                
+                <div id="keywordPreview" style="margin-bottom: 20px;">
+                    <h4 style="color: #2c3e50; margin-bottom: 10px;">Keywords to be stored on I14Y:</h4>
+                    <div id="keywordPreviewList"></div>
+                </div>
+                
+                <div style="display: flex; gap: 15px;">
+                    <button id="confirmUpdateBtn" class="search-btn" style="background: #059669; padding: 12px 30px;">
+                        Confirm Update to I14Y
+                    </button>
+                </div>
+            </div>
+            
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Updating keywords on I14Y...</p>
+            </div>
+            
+            <div id="error" class="error" style="display: none;"></div>
+            <div id="success" class="success-message" style="display: none;"></div>
+        </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        let selectedItem = null;
+        let finalKeywords = [];
+        let currentEnv = 'prod';
+        
+        window.addEventListener('DOMContentLoaded', function() {
+            const storedItem = sessionStorage.getItem('selectedI14YItem');
+            const storedFinal = sessionStorage.getItem('finalKeywords');
+            const storedSelected = sessionStorage.getItem('selectedKeywords');
+            const savedEnv = sessionStorage.getItem('i14yEnv');
+            if (savedEnv === 'prod' || savedEnv === 'abnahme') {
+                currentEnv = savedEnv;
+            }
+            
+            if (!storedItem) {
+                window.location.href = '/refine/step1';
+                return;
+            }
+            selectedItem = JSON.parse(storedItem);
+            if (storedFinal) {
+                finalKeywords = JSON.parse(storedFinal);
+            } else if (storedSelected) {
+                finalKeywords = JSON.parse(storedSelected);
+            }
+            if (!finalKeywords || finalKeywords.length === 0) {
+                window.location.href = '/refine/step3';
+                return;
+            }
+            
+            displaySummary();
+            displayKeywordPreview();
+        });
+        
+        function displaySummary() {
+            document.getElementById('summaryObjectTitle').textContent = selectedItem.title || 'Untitled';
+            document.getElementById('summaryObjectType').textContent = selectedItem.objectType || 'dataset';
+            document.getElementById('summaryObjectId').textContent = selectedItem.id || selectedItem.guid || 'Unknown';
+            const existingCount = finalKeywords.filter(kw => kw.isExisting).length;
+            const newCount = finalKeywords.length - existingCount;
+            document.getElementById('summaryKeywordCount').textContent = `${finalKeywords.length} total (existing: ${existingCount}, new: ${newCount})`;
+        }
+        
+        function displayKeywordPreview() {
+            const previewContainer = document.getElementById('keywordPreviewList');
+            const keywordsHtml = finalKeywords.map(kw => {
+                const label = extractLabel(kw);
+                const uri = kw.uri || '';
+                const isExisting = !!kw.isExisting;
+                const cardBg = isExisting ? '#f1f5f9' : '#ecfdf5';
+                const borderColor = isExisting ? '#94a3b8' : '#059669';
+                const badgeBg = isExisting ? '#e2e8f0' : '#d1fae5';
+                const badgeColor = isExisting ? '#475569' : '#047857';
+                const badgeLabel = isExisting ? 'Existing' : 'New';
+                return `
+                    <div style="margin-bottom: 8px; padding: 10px; background: ${cardBg}; border: 1px solid ${borderColor}; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+                            <div style="font-weight: 600; color: #2c3e50;">${escapeHtml(label)}</div>
+                            <span style="font-size: 0.75em; background: ${badgeBg}; color: ${badgeColor}; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; font-weight: 700;">${badgeLabel}</span>
+                        </div>
+                        ${uri ? `<div style="font-size: 0.85em; color: #666; font-family: monospace; word-break: break-all; margin-top: 4px;">${escapeHtml(uri)}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+            previewContainer.innerHTML = keywordsHtml;
+        }
+        
+        document.getElementById('confirmUpdateBtn').addEventListener('click', async function() {
+            const apiToken = document.getElementById('apiToken').value.trim();
+            
+            if (!apiToken) {
+                document.getElementById('error').textContent = 'Please provide an API token';
+                document.getElementById('error').style.display = 'block';
+                return;
+            }
+            
+            if (!apiToken.startsWith('Bearer ')) {
+                document.getElementById('error').textContent = 'API token must start with "Bearer "';
+                document.getElementById('error').style.display = 'block';
+                return;
+            }
+            
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('success').style.display = 'none';
+            
+            try {
+                const payload = {
+                    apiToken,
+                    objectId: selectedItem.id || selectedItem.guid,
+                    objectType: selectedItem.objectType || 'dataset',
+                    keywords: finalKeywords,
+                    fullDataset: buildFullDatasetPayload(),
+                    env: currentEnv
+                };
+
+                const response = await fetch('/update-i14y-keywords', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    document.getElementById('success').innerHTML = `
+                        <div style="padding: 20px; background: #ecfdf5; border-left: 4px solid #059669; border-radius: 4px;">
+                            <h3 style="margin: 0 0 10px 0; color: #059669;">✓ Keywords Updated Successfully!</h3>
+                            <p style="margin: 0; color: #064e3b;">
+                                The keywords have been updated on I14Y. You can now view the updated item on I14Y.
+                            </p>
+                            <div style="margin-top: 15px;">
+                                <a href="/refine/step1" class="search-btn" style="display: inline-block; text-decoration: none;">
+                                    Update Another Item
+                                </a>
+                                <a href="/welcome" class="search-btn secondary" style="display: inline-block; text-decoration: none; margin-left: 10px;">
+                                    Back to Home
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('success').style.display = 'block';
+                    document.getElementById('apiToken').value = '';
+                    sessionStorage.removeItem('selectedI14YItem');
+                    sessionStorage.removeItem('generatedKeywords');
+                    sessionStorage.removeItem('selectedKeywords');
+                    sessionStorage.removeItem('finalKeywords');
+                } else {
+                    throw new Error(data.error || 'Failed to update keywords');
+                }
+            } catch (error) {
+                document.getElementById('error').textContent = 'Error updating keywords: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        });
+
+        function buildFullDatasetPayload() {
+            return {
+                fullObject: selectedItem.fullObject || selectedItem,
+                title: selectedItem.title || (selectedItem.fullObject && selectedItem.fullObject.title) || {},
+                description: selectedItem.description || (selectedItem.fullObject && selectedItem.fullObject.description) || {},
+                guid: selectedItem.guid || selectedItem.id,
+                id: selectedItem.id || selectedItem.guid
+            };
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function extractLabel(kw) {
+            if (kw.label && typeof kw.label === 'object') {
+                return kw.label.de || kw.label.fr || kw.label.en || kw.label.it || kw.label.rm || Object.values(kw.label)[0] || 'Unknown';
+            }
+            if (kw.multilingual_label && typeof kw.multilingual_label === 'object') {
+                const ml = kw.multilingual_label;
+                return ml.de || ml.fr || ml.en || ml.it || ml.rm || Object.values(ml)[0] || 'Unknown';
+            }
+            if (kw.label_de || kw.label_fr || kw.label_en || kw.label_it || kw.label_rm) {
+                return kw.label_de || kw.label_fr || kw.label_en || kw.label_it || kw.label_rm || 'Unknown';
+            }
+            if (typeof kw.label === 'string') return kw.label;
+            return 'Unknown';
+        }
+    </script>
+</body>
+</html>

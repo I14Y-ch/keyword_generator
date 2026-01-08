@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Current Item Details - Refine Keywords</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+
+</head>
+<body>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
+        <div class="container">
+            <div class="page-header">
+                <h1>Review Item Details</h1>
+                <p class="page-lead">Review current information and keywords</p>
+            </div>
+
+            <ul class="steps-nav">
+                <li class="step-item">
+                    <a href="/refine/step1" class="step-link completed">
+                        <span class="step-number">1</span>
+                        <span>Search I14Y</span>
+                    </a>
+                </li>
+                <li class="step-arrow">→</li>
+                <li class="step-item">
+                    <span class="step-link active">
+                        <span class="step-number">2</span>
+                        <span>Review Item</span>
+                    </span>
+                </li>
+                <li class="step-arrow">→</li>
+                <li class="step-item">
+                    <span class="step-link disabled">
+                        <span class="step-number">3</span>
+                        <span>Arrange & Update</span>
+                    </span>
+                </li>
+            </ul>
+            
+            <div class="workflow-section">
+                <h2 class="section-title">Item Information</h2>
+                
+                <div id="selectedItemDetails"></div>
+                
+                <div id="currentKeywordsSection" style="margin-top: 30px;">
+                    <h3 style="color: #2c3e50; margin-bottom: 15px;">Current Keywords</h3>
+                    <div id="currentKeywordsList" class="keyword-grid"></div>
+                </div>
+                
+                <div style="margin-top: 30px; display: flex; gap: 15px;">
+                    <button id="generateNewBtn" class="search-btn" style="padding: 12px 30px;">
+                        Generate Improved Keywords →
+                    </button>
+                </div>
+            </div>
+            
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Loading item details...</p>
+            </div>
+            
+            <div id="error" class="error" style="display: none;"></div>
+        </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        let selectedItem = null;
+        let currentEnv = 'prod';
+        
+        // Load selected item from sessionStorage
+        window.addEventListener('DOMContentLoaded', function() {
+            const savedEnv = sessionStorage.getItem('i14yEnv');
+            if (savedEnv === 'prod' || savedEnv === 'abnahme') {
+                currentEnv = savedEnv;
+            }
+
+            const storedItem = sessionStorage.getItem('selectedI14YItem');
+            if (!storedItem) {
+                window.location.href = '/refine/step1';
+                return;
+            }
+            
+            selectedItem = JSON.parse(storedItem);
+            loadFullObject();
+        });
+
+        async function loadFullObject() {
+            const loadingEl = document.getElementById('loading');
+            loadingEl.style.display = 'block';
+
+            try {
+                const objectId = selectedItem.id || selectedItem.guid;
+                if (!objectId) {
+                    displayItemDetails();
+                    return;
+                }
+
+                const response = await fetch('/get-i14y-object', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        objectId,
+                        objectType: selectedItem.objectType || 'dataset',
+                        env: currentEnv
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok && data.fullObject) {
+                    selectedItem.fullObject = data.fullObject;
+                    sessionStorage.setItem('selectedI14YItem', JSON.stringify(selectedItem));
+                } else if (data.error) {
+                    document.getElementById('error').textContent = 'Error loading item: ' + data.error;
+                    document.getElementById('error').style.display = 'block';
+                }
+            } catch (error) {
+                document.getElementById('error').textContent = 'Error loading item details: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+            } finally {
+                displayItemDetails();
+                loadingEl.style.display = 'none';
+            }
+        }
+        
+        function displayItemDetails() {
+            const detailsContainer = document.getElementById('selectedItemDetails');
+            
+            const title = selectedItem.title || 'Untitled';
+            const description = selectedItem.description || 'No description available';
+            const objectType = selectedItem.objectType || 'dataset';
+            const id = selectedItem.id || selectedItem.guid || 'Unknown';
+            const identifier = selectedItem.identifier || (selectedItem.fullObject && selectedItem.fullObject.identifier) || id;
+            const publisher = getPublisher(selectedItem) || 'Unknown';
+            const status = getStatus(selectedItem) || 'Unknown';
+            const publicationLevel = selectedItem.publicationLevel || (selectedItem.fullObject && selectedItem.fullObject.publicationLevel) || '';
+            
+            // Construct public I14Y URL using just the identifier
+            const publicI14yUrl = `https://www.i14y.admin.ch/de/catalog/datasets/${encodeURIComponent(identifier)}`;
+            
+            detailsContainer.innerHTML = `
+                <div style="background: white; padding: 24px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="margin: 0 0 8px 0; color: #1f2937; font-size: 1.5em; font-weight: 600;">${escapeHtml(title)}</h3>
+                        <div style="color: #6b7280; font-size: 0.9em; margin-bottom: 8px;">
+                            <span>${escapeHtml(objectType)}</span>
+                            <span style="margin: 0 8px;">•</span>
+                            <span>ID: ${escapeHtml(identifier)}</span>
+                            <span style="margin: 0 8px;">•</span>
+                            <a href="${publicI14yUrl}" target="_blank" style="color: #2563eb; text-decoration: none;">View on I14Y ↗</a>
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 16px;">
+                        <div style="color: #374151; line-height: 1.6;">${escapeHtml(description)}</div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
+                        <div>
+                            <div style="font-size: 0.85em; color: #6b7280; margin-bottom: 4px;">Publisher</div>
+                            <div style="font-weight: 500; color: #1f2937;">${escapeHtml(publisher)}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 0.85em; color: #6b7280; margin-bottom: 4px;">Status</div>
+                            <div style="font-weight: 500; color: #1f2937;">${escapeHtml(status)}</div>
+                        </div>
+                        ${publicationLevel ? `<div>
+                            <div style="font-size: 0.85em; color: #6b7280; margin-bottom: 4px;">Publication Level</div>
+                            <div style="font-weight: 500; color: #1f2937;">${escapeHtml(publicationLevel)}</div>
+                        </div>` : ''}
+                    </div>
+                </div>
+            `;
+            
+            displayCurrentKeywords();
+        }
+        
+        function displayCurrentKeywords() {
+            const keywordsContainer = document.getElementById('currentKeywordsList');
+            
+            let keywords = [];
+            
+            // Try different possible keyword field names from I14Y API
+            if (selectedItem.fullObject) {
+                keywords = selectedItem.fullObject.keywords || 
+                          selectedItem.fullObject.keyword || 
+                          selectedItem.fullObject.theme || 
+                          [];
+            } else if (selectedItem.keywords) {
+                keywords = selectedItem.keywords;
+            } else if (selectedItem.keyword) {
+                keywords = selectedItem.keyword;
+            } else if (selectedItem.theme) {
+                keywords = selectedItem.theme;
+            }
+            
+            // Ensure keywords is an array
+            if (!Array.isArray(keywords)) {
+                keywords = [];
+            }
+            
+            if (keywords.length === 0) {
+                keywordsContainer.innerHTML = '<p style="color: #666; font-style: italic;">No keywords found</p>';
+                return;
+            }
+            
+            const keywordsHtml = keywords.map(kw => {
+                let label = '';
+                let uri = '';
+                const langs = [];
+                const langKeys = ['de','fr','it','en','rm'];
+                let sourceTag = '';
+                
+                // Handle different keyword structures from I14Y API
+                if (typeof kw === 'string') {
+                    // Keyword is just a string
+                    label = kw;
+                } else if (kw && typeof kw === 'object') {
+                    // Get URI
+                    uri = kw.uri || '';
+                    
+                    // Determine source from URI
+                    if (uri) {
+                        const uriLower = uri.toLowerCase();
+                        if (uriLower.includes('termdat')) sourceTag = 'TERMDAT';
+                        else if (uriLower.includes('gemet')) sourceTag = 'GEMET';
+                        else if (uriLower.includes('wikidata')) sourceTag = 'Wikidata';
+                        else sourceTag = 'Link';
+                    }
+                    
+                    // Extract label from various possible structures
+                    if (kw.label) {
+                        if (typeof kw.label === 'string') {
+                            label = kw.label;
+                        } else if (typeof kw.label === 'object') {
+                            // Check for nested multilingual_label first
+                            if (kw.label.multilingual_label && typeof kw.label.multilingual_label === 'object') {
+                                const ml = kw.label.multilingual_label;
+                                langKeys.forEach(l => { if (ml[l]) langs.push(l); });
+                                label = ml.de || ml.fr || ml.en || ml.it || ml.rm || Object.values(ml)[0] || '';
+                            } else {
+                                // Direct language keys in label object
+                                langKeys.forEach(l => { if (kw.label[l]) langs.push(l); });
+                                label = kw.label.de || kw.label.fr || kw.label.en || kw.label.it || kw.label.rm || Object.values(kw.label)[0] || '';
+                            }
+                        }
+                    }
+                    
+                    // If no label found, try multilingual_label at top level
+                    if (!label && kw.multilingual_label && typeof kw.multilingual_label === 'object') {
+                        langKeys.forEach(l => { if (kw.multilingual_label[l]) langs.push(l); });
+                        label = kw.multilingual_label.de || kw.multilingual_label.fr || 
+                               kw.multilingual_label.en || kw.multilingual_label.it || 
+                               kw.multilingual_label.rm || Object.values(kw.multilingual_label)[0] || '';
+                    }
+                    
+                    // Fallback: try direct language properties
+                    if (!label) {
+                        langKeys.forEach(l => { if (kw[l]) langs.push(l); });
+                        label = kw.de || kw.fr || kw.en || kw.it || kw.rm || '';
+                    }
+                }
+                
+                if (!label) label = 'Unknown';
+                
+                // Create language indicators
+                let languageIndicators = '';
+                if (langs.length > 0) {
+                    languageIndicators = `<div class="language-indicators">${langs.map(lang => 
+                        `<span class="lang-tag" title="${lang.toUpperCase()}: Available">${lang.toUpperCase()}</span>`
+                    ).join('')}</div>`;
+                }
+                
+                const sourceColor = sourceTag === 'TERMDAT' ? '#059669' :
+                                   sourceTag === 'GEMET' ? '#7c3aed' :
+                                   sourceTag === 'Wikidata' ? '#2563eb' : '#64748b';
+                
+                return `
+                    <div class="keyword-card">
+                        <div class="keyword-source ${sourceTag ? 'source-' + sourceTag.toLowerCase() : 'source-existing'}">${escapeHtml(sourceTag || 'LOCAL')}</div>
+                        <div class="keyword-title">${escapeHtml(label)}</div>
+                        ${languageIndicators}
+                        ${uri ? `<div class="keyword-uri" style="margin-top: 4px;"><a href="${escapeHtml(uri)}" target="_blank" rel="noopener noreferrer">${escapeHtml(uri)}</a></div>` : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            keywordsContainer.innerHTML = keywordsHtml;
+        }
+        
+        document.getElementById('generateNewBtn').addEventListener('click', async function() {
+            const description = selectedItem.description || selectedItem.title || '';
+            
+            if (!description) {
+                document.getElementById('error').textContent = 'No description available to generate keywords';
+                document.getElementById('error').style.display = 'block';
+                return;
+            }
+            
+            // Store the description and navigate to step 3 immediately
+            sessionStorage.setItem('keywordQuery', description);
+            window.location.href = '/refine/step3';
+        });
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function extractTextField(field, preferredLangOrder) {
+            if (!field) return '';
+            if (typeof field === 'string') return field;
+            if (typeof field === 'object') {
+                const langs = preferredLangOrder || ['en', 'de', 'fr', 'it'];
+                for (const lang of langs) {
+                    if (field[lang]) return field[lang];
+                }
+                const vals = Object.values(field);
+                if (vals.length) return vals[0];
+            }
+            return '';
+        }
+
+        function getPreferredLangOrder() {
+            const browserLang = (navigator.language || '').toLowerCase().split('-')[0];
+            const langs = ['en', 'de', 'fr', 'it'];
+            const ordered = [];
+            if (langs.includes(browserLang)) ordered.push(browserLang);
+            ordered.push('en', 'de', 'fr', 'it');
+            return Array.from(new Set(ordered));
+        }
+
+        function getPublisher(item) {
+            const order = getPreferredLangOrder();
+            // Handle nested publisher.name structure
+            let publisherField = item.publisher || (item.fullObject && item.fullObject.publisher);
+            if (publisherField && typeof publisherField === 'object' && publisherField.name) {
+                return extractTextField(publisherField.name, order);
+            }
+            // Fallback to direct extraction
+            let publisher = extractTextField(publisherField, order);
+            if (!publisher && item.fullObject) {
+                let orgField = item.fullObject.organisation;
+                if (orgField && typeof orgField === 'object' && orgField.name) {
+                    return extractTextField(orgField.name, order);
+                }
+                publisher = extractTextField(orgField, order);
+            }
+            return publisher;
+        }
+
+        function getStatus(item) {
+            const candidates = [
+                item.registrationStatus,
+                item.fullObject && item.fullObject.registrationStatus,
+                item.status,
+                item.fullObject && item.fullObject.status,
+                item.fullObject && item.fullObject.lifeCycleStatus,
+                item.fullObject && item.fullObject.lifecycleStatus,
+                item.fullObject && item.fullObject.state,
+                item.fullObject && item.fullObject.statusText
+            ];
+            for (const cand of candidates) {
+                const val = extractTextField(cand);
+                if (val) return val;
+            }
+            return '';
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search I14Y Item - Refine Keywords</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+
+</head>
+<body>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
+        <div class="container">
+            <div class="page-header">
+                <h1>Refine Existing I14Y Keywords</h1>
+                <p class="page-lead">Search for an existing I14Y item and improve its keywords</p>
+            </div>
+
+            <ul class="steps-nav">
+                <li class="step-item">
+                    <span class="step-link active">
+                        <span class="step-number">1</span>
+                        <span>Search I14Y</span>
+                    </span>
+                </li>
+                <li class="step-arrow">→</li>
+                <li class="step-item">
+                    <span class="step-link disabled">
+                        <span class="step-number">2</span>
+                        <span>Review Item</span>
+                    </span>
+                </li>
+                <li class="step-arrow">→</li>
+                <li class="step-item">
+                    <span class="step-link disabled">
+                        <span class="step-number">3</span>
+                        <span>Arrange & Update</span>
+                    </span>
+                </li>
+            </ul>
+            
+            <div class="workflow-section">
+                <h2 class="section-title">Search for I14Y Item</h2>
+                <p class="section-description">Search for the dataset, dataservice, public service, or concept you want to improve.</p>
+                
+                
+                <div style="display: flex; gap: 10px; margin-bottom: 20px; align-items: center;">
+                    <input type="text" id="i14ySearchInput" class="search-input" 
+                    placeholder="Search I14Y (e.g., 'Seilbahn', 'Energie', 'Verkehr')..." 
+                    style="flex: 1; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px;" />
+                    <div class="env-toggle-container" title="Choose between the pre-production environment Abnahme (ABN) or the productive environment (PROD)">
+                        <span class="env-label" id="envLabelLeft">ABN</span>
+                        <label class="env-toggle">
+                            <input type="checkbox" id="envToggle">
+                            <span class="env-slider"></span>
+                        </label>
+                        <span class="env-label" id="envLabelRight">PROD</span>
+                    </div>
+                    <button id="i14ySearchBtn" class="search-btn" style="padding: 12px 30px;">Search</button>
+                </div>
+                
+                <!-- Filters -->
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <label for="typeFilter">Type:</label>
+                        <select id="typeFilter" class="filter-select">
+                            <option value="">All Types</option>
+                            <option value="dataset">Dataset</option>
+                            <option value="dataservice">Data Service</option>
+                            <option value="publicservice">Public Service</option>
+                            <option value="concept">Concept</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label for="orgFilter">Organisation:</label>
+                        <input type="text" id="orgFilter" class="filter-input" list="orgDatalist" placeholder="Type to search organisations..." autocomplete="off">
+                        <datalist id="orgDatalist"></datalist>
+                    </div>
+                </div>
+
+                <div id="i14yResults" style="display: none;"></div>
+                <div id="searchStatus" style="margin-top: 10px; color: #666; font-size: 0.9em;"></div>
+            </div>
+            
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Searching I14Y...</p>
+            </div>
+            
+            <div id="error" class="error" style="display: none;"></div>
+        </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        let cachedSearchResults = [];
+        let currentEnv = 'prod';
+        let organisations = [];
+
+        // Initialize environment toggle from previous choice
+        window.addEventListener('DOMContentLoaded', function() {
+            const savedEnv = sessionStorage.getItem('i14yEnv');
+            if (savedEnv === 'prod' || savedEnv === 'abnahme') {
+                currentEnv = savedEnv;
+            }
+            document.getElementById('envToggle').checked = (currentEnv === 'prod');
+            
+            // Load organisations
+            loadOrganisations();
+        });
+
+        document.getElementById('envToggle').addEventListener('change', function(e) {
+            currentEnv = e.target.checked ? 'prod' : 'abnahme';
+            sessionStorage.setItem('i14yEnv', currentEnv);
+            // Reload organisations when environment changes
+            loadOrganisations();
+        });
+        
+        async function loadOrganisations() {
+            const orgInput = document.getElementById('orgFilter');
+            const orgDatalist = document.getElementById('orgDatalist');
+            
+            // Clear existing options
+            orgDatalist.innerHTML = '';
+            
+            try {
+                const response = await fetch('/get-i14y-organisations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ env: currentEnv })
+                });
+                
+                const data = await response.json();
+                
+                if (data.organisations) {
+                    organisations = data.organisations;
+                    
+                    // Add an empty option for "All Organisations"
+                    const allOption = document.createElement('option');
+                    allOption.value = '';
+                    allOption.textContent = 'All Organisations';
+                    orgDatalist.appendChild(allOption);
+                    
+                    // Build a set to track which organizations we've added
+                    const addedOrgs = new Set();
+                    
+                    organisations.forEach(org => {
+                        // Add all language variants as separate options
+                        if (org.names) {
+                            Object.values(org.names).forEach(name => {
+                                if (name && !addedOrgs.has(name)) {
+                                    const option = document.createElement('option');
+                                    option.value = name;
+                                    option.textContent = name;
+                                    option.setAttribute('data-org-id', org.id);
+                                    orgDatalist.appendChild(option);
+                                    addedOrgs.add(name);
+                                }
+                            });
+                        } else {
+                            // Fallback for organizations without language variants
+                            const option = document.createElement('option');
+                            option.value = org.name;
+                            option.textContent = org.name;
+                            option.setAttribute('data-org-id', org.id);
+                            orgDatalist.appendChild(option);
+                            addedOrgs.add(org.name);
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading organisations:', error);
+                // Add fallback option
+                const allOption = document.createElement('option');
+                allOption.value = '';
+                allOption.textContent = 'All Organisations';
+                orgDatalist.appendChild(allOption);
+            }
+        }
+        
+        document.getElementById('i14ySearchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                document.getElementById('i14ySearchBtn').click();
+            }
+        });
+        
+        document.getElementById('i14ySearchBtn').addEventListener('click', async function() {
+            const searchQuery = document.getElementById('i14ySearchInput').value.trim();
+            const objectType = document.getElementById('typeFilter').value;
+            const organisation = document.getElementById('orgFilter').value;
+            
+            if (!searchQuery) {
+                document.getElementById('searchStatus').textContent = 'Please enter a search term';
+                return;
+            }
+            
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('searchStatus').textContent = 'Searching...';
+            document.getElementById('i14yResults').style.display = 'none';
+            
+            try {
+                const response = await fetch('/search-i14y-datasets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        query: searchQuery, 
+                        env: currentEnv,
+                        objectType: objectType,
+                        organisation: organisation
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.datasets && data.datasets.length > 0) {
+                    cachedSearchResults = data.datasets;
+                    applyFiltersAndDisplay();
+                } else {
+                    document.getElementById('searchStatus').textContent = 'No items found';
+                    document.getElementById('i14yResults').style.display = 'none';
+                }
+            } catch (error) {
+                document.getElementById('error').textContent = 'Error searching I14Y: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('searchStatus').textContent = 'Search failed';
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        });
+        
+        // Add filter event listeners
+        document.getElementById('typeFilter').addEventListener('change', applyFiltersAndDisplay);
+        document.getElementById('orgFilter').addEventListener('input', function(e) {
+            // Trigger filtering on input change
+            applyFiltersAndDisplay();
+        });
+        document.getElementById('orgFilter').addEventListener('change', function(e) {
+            // Allow any value - we'll match across all language variants
+            applyFiltersAndDisplay();
+        });
+        
+        function applyFiltersAndDisplay() {
+            if (cachedSearchResults.length === 0) {
+                return; // No results to filter
+            }
+            
+            const typeFilter = document.getElementById('typeFilter').value;
+            const orgFilterInput = document.getElementById('orgFilter').value;
+            
+            // Apply filters to cached results
+            let filteredResults = cachedSearchResults.filter(item => {
+                // Type filter
+                if (typeFilter && item.objectType !== typeFilter) {
+                    return false;
+                }
+                
+                // Organisation filter (multilingual)
+                if (orgFilterInput && orgFilterInput.trim()) {
+                    const filterLower = orgFilterInput.toLowerCase();
+                    const itemPublisher = item.publisher || item.organisation || '';
+                    
+                    // Find if any organization in our list matches the filter input
+                    const matchingOrg = organisations.find(org => {
+                        // Check if the filter matches any language variant of this org
+                        if (org.names) {
+                            return Object.values(org.names).some(name => 
+                                name && name.toLowerCase() === filterLower
+                            );
+                        }
+                        return org.name && org.name.toLowerCase() === filterLower;
+                    });
+                    
+                    if (matchingOrg) {
+                        // Check if the item's publisher matches any language variant of the selected org
+                        let matches = false;
+                        if (matchingOrg.names) {
+                            matches = Object.values(matchingOrg.names).some(name => 
+                                name && itemPublisher.toLowerCase().includes(name.toLowerCase())
+                            );
+                        } else {
+                            matches = itemPublisher.toLowerCase().includes(matchingOrg.name.toLowerCase());
+                        }
+                        if (!matches) {
+                            return false;
+                        }
+                    } else {
+                        // Fallback: simple text matching
+                        if (typeof itemPublisher === 'string' && !itemPublisher.toLowerCase().includes(filterLower)) {
+                            return false;
+                        }
+                    }
+                }
+                
+                return true;
+            });
+            
+            displaySearchResults(filteredResults);
+            
+            if (filteredResults.length === 0) {
+                document.getElementById('searchStatus').textContent = 'No items match the current filters';
+            } else {
+                document.getElementById('searchStatus').textContent = `Showing ${filteredResults.length} of ${cachedSearchResults.length} items`;
+            }
+        }
+        
+        function selectItem(index) {
+            const item = cachedSearchResults[index];
+            // Store in sessionStorage and navigate to step 2
+            sessionStorage.setItem('selectedI14YItem', JSON.stringify(item));
+            window.location.href = '/refine/step2';
+        }
+        
+        function displaySearchResults(results) {
+            const resultsContainer = document.getElementById('i14yResults');
+            resultsContainer.innerHTML = '';
+            
+            results.forEach((result, filteredIndex) => {
+                // Find the original index in cachedSearchResults
+                const originalIndex = cachedSearchResults.findIndex(item => item.id === result.id && item.title === result.title);
+                
+                const resultCard = document.createElement('div');
+                resultCard.className = 'search-result-card';
+                resultCard.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                        <div style="flex: 1;">
+                            <h4 style="margin: 0 0 8px 0; color: #2c3e50;">${escapeHtml(result.title)}</h4>
+                            ${result.description ? `<p style="margin: 0 0 8px 0; font-size: 0.9em; color: #666;">${escapeHtml(result.description.substring(0, 150))}${result.description.length > 150 ? '...' : ''}</p>` : ''}
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 6px;">
+                                <span style="background: #e8f4fd; color: #1e40af; padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 600;">
+                                    ${escapeHtml(result.objectType || 'dataset')}
+                                </span>
+                                ${result.status && result.status.trim() ? `<span style="background: #fef3c7; color: #92400e; padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 600;">
+                                    ${escapeHtml(result.status)}
+                                </span>` : ''}
+                                ${result.publicationLevel && result.publicationLevel.trim() ? `<span style="background: #d1fae5; color: #065f46; padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 600;">
+                                    ${escapeHtml(result.publicationLevel)}
+                                </span>` : ''}
+                                ${result.publisher && result.publisher.trim() ? `<span style="background: #f0f9ff; color: #0369a1; padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 600;">
+                                    ${escapeHtml(typeof result.publisher === 'string' ? result.publisher : (result.publisher.name || result.publisher.title || 'Unknown'))}
+                                </span>` : ''}
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+                                ${result.id ? `<div style="color: #666; font-size: 0.8em; font-family: monospace;">ID: ${escapeHtml(result.id)}</div>` : ''}
+                                ${result.url && result.url.trim() ? `<a href="${escapeHtml(result.url)}" target="_blank" rel="noopener noreferrer" style="color: #0369a1; font-size: 0.8em; text-decoration: none; display: flex; align-items: center; gap: 4px;">
+                                    <span>🔗</span> View on I14Y
+                                </a>` : ''}
+                            </div>
+                        </div>
+                        <button class="select-btn" onclick="selectItem(${originalIndex})">Select</button>
+                    </div>
+                `;
+                resultsContainer.appendChild(resultCard);
+            });
+            
+            resultsContainer.style.display = 'block';
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

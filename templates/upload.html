@@ -3,185 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Upload Keywords</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-            overflow: hidden;
-        }
-        .header {
-            background: linear-gradient(135deg, #4c63d2 0%, #7c3aed 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-        .header p {
-            font-size: 1.1em;
-            opacity: 0.9;
-            line-height: 1.6;
-        }
-        .content {
-            padding: 40px;
-        }
-        
-        /* Tab styling */
-        .tabs {
-            display: flex;
-            border-bottom: 2px solid #e2e8f0;
-            margin-bottom: 20px;
-        }
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            transition: all 0.3s ease;
-            font-weight: 500;
-        }
-        .tab.active {
-            border-bottom-color: #4c63d2;
-            color: #4c63d2;
-        }
-        .tab:hover {
-            background-color: #f8fafc;
-        }
-        .tab-content {
-            display: none;
-        }
-        .tab-content.active {
-            display: block;
-        }
-        
-        /* Keyword cards for tab view */
-        .keyword-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 15px;
-            margin-top: 20px;
-        }
-        .keyword-card {
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 15px;
-            transition: all 0.3s ease;
-        }
-        .keyword-card:hover {
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        }
-        .keyword-source {
-            font-size: 0.8em;
-            font-weight: 600;
-            color: white;
-            padding: 4px 8px;
-            border-radius: 4px;
-            margin-bottom: 8px;
-            display: inline-block;
-        }
-        .keyword-source.termdat { background: #059669; }
-        .keyword-source.gemet { background: #7c3aed; }
-        .keyword-source.wikidata { background: #2563eb; }
-        .keyword-label {
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-        .keyword-description {
-            font-size: 0.9em;
-            color: #6b7280;
-            margin-bottom: 8px;
-        }
-        .keyword-uri a {
-            font-size: 0.8em;
-            color: #4c63d2;
-            text-decoration: none;
-        }
-        
-        .input-field {
-            width: 100%;
-            padding: 15px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-size: 1em;
-            transition: border-color 0.3s ease;
-        }
-        .input-field:focus {
-            border-color: #4c63d2;
-            outline: none;
-        }
-        .action-btn {
-            padding: 15px 30px;
-            background: #059669;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 1em;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-right: 10px;
-        }
-        .action-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(5, 150, 105, 0.3);
-        }
-        .action-btn.secondary {
-            background: #6b7280;
-        }
-        .action-btn.secondary:hover {
-            box-shadow: 0 5px 15px rgba(107, 114, 128, 0.3);
-        }
-        
-        .success-message {
-            background: #d1fae5;
-            border: 1px solid #10b981;
-            color: #065f46;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .success-message a {
-            color: #059669;
-            font-weight: 600;
-        }
-        
-        .language-indicators {
-            margin: 8px 0;
-            font-size: 0.85em;
-        }
-        
-        .lang-tag {
-            background: #e2e8f0;
-            color: #475569;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 0.75em;
-            font-weight: 600;
-            margin-right: 5px;
-        }
-    </style>
+    <title>I14Y - Upload Keywords</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
 <body>
+    <div class="beta-badge">Beta</div>
+    
+    <header>
+        <div class="header-wrapper">
+            <div class="layout-brand">
+                <div class="brand-left">
+                    <a href="/" style="text-decoration: none; display: flex; align-items: center; gap: 12px;">
+                        <img src="{{ url_for('static', filename='logo_i14y.png') }}" alt="I14Y" class="brand-logo">
+                        <h1 class="header-title">I14Y Tools</h1>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
     <div class="container">
-        <div class="header">
+        <a href="{{ url_for('index') }}" style="display: inline-flex; align-items: center; color: #3182ce; text-decoration: none; margin-bottom: 15px; font-size: 0.95em;">
+            ← Back to Keyword Generator
+        </a>
+        <div class="page-header">
             <h1>Upload Keywords to I14Y</h1>
-            <p>Review your selected keywords and upload them to the I14Y catalog</p>
+            <p class="page-lead">Review your selected keywords and upload them to the I14Y catalog</p>
         </div>
         
-        <div class="content">
+        <div class="search-section">
             <div id="successMessage" class="success-message" style="display: none;"></div>
             
             <!-- Tab Navigation -->
@@ -193,10 +45,12 @@
             <!-- Overview Tab -->
             <div id="overview" class="tab-content active">
                 <p><strong>Selected Keywords Summary:</strong></p>
-                <div id="keywordSummary"></div>
+                <p><div id="keywordSummary"></div></p>
                 
+                <h3>Dataset GUID</h3>
                 <input type="text" id="datasetGuid" class="input-field" placeholder="Enter dataset GUID" />
-                <input type="password" id="i14yToken" class="input-field" placeholder="Enter your I14Y token (with or without 'Bearer' prefix)" />
+                <h3>I14Y Token</h3>
+                <input type="password" id="i14yToken" class="input-field" placeholder="Enter your I14Y token" />
                 
                 <div style="display: flex; gap: 10px; align-items: center; margin-top: 20px;">
                     <button id="uploadBtn" class="action-btn">Add Keywords to I14Y</button>
@@ -215,6 +69,7 @@
     <script>
         const keywords = JSON.parse(localStorage.getItem('selectedKeywords')) || [];
         const i14yKeywords = JSON.parse(localStorage.getItem('i14yKeywords')) || [];
+        const selectedI14YGuid = localStorage.getItem('selectedI14YGuid') || '';
         const datasetGuidInput = document.getElementById('datasetGuid');
         const i14yTokenInput = document.getElementById('i14yToken');
         const uploadBtn = document.getElementById('uploadBtn');
@@ -222,6 +77,12 @@
         const keywordSummary = document.getElementById('keywordSummary');
         const keywordGrid = document.getElementById('keywordGrid');
         const successMessage = document.getElementById('successMessage');
+        
+        // Pre-fill the GUID field if a dataset was selected from I14Y
+        if (selectedI14YGuid) {
+            datasetGuidInput.value = selectedI14YGuid;
+            console.log('Pre-filled dataset GUID from I14Y selection:', selectedI14YGuid);
+        }
 
         // Tab functionality
         document.querySelectorAll('.tab').forEach(tab => {
@@ -309,16 +170,26 @@
                 return;
             }
 
+            // Build keywords in new schema { label: {de/fr/it/en/rm}, uri }
+            const toNewKeyword = (kw) => {
+                const labels = {};
+                if (kw.multilingual_label) {
+                    ['de', 'fr', 'it', 'en', 'rm'].forEach(lang => {
+                        if (kw.multilingual_label[lang]) labels[lang] = kw.multilingual_label[lang];
+                    });
+                } else if (kw.label) {
+                    labels['de'] = kw.label;
+                }
+                return {
+                    label: labels,
+                    uri: kw.uri || ''
+                };
+            };
+
             const payload = {
                 dataset_guid: datasetGuid,
                 i14y_token: i14yToken,
-                keywords: i14yKeywords.length > 0 ? i14yKeywords : keywords.map(keyword => ({
-                    de: keyword.label,
-                    fr: keyword.label,
-                    it: keyword.label,
-                    en: keyword.label,
-                    uri: keyword.uri
-                }))
+                keywords: i14yKeywords.length > 0 ? i14yKeywords : keywords.map(toNewKeyword)
             };
 
             try {
@@ -365,8 +236,27 @@
         backBtn.addEventListener('click', () => {
             // Clear token from memory for security
             i14yTokenInput.value = '';
-            window.location.href = '/';
+            window.location.href = '/generate';
         });
     </script>
+    </div>
+    </main>
+    
+    <footer>
+        <div class="footer-content">
+            <div class="footer-links">
+                <h3>Links</h3>
+                <ul>
+                    <li><a href="https://www.bfs.admin.ch/bfs/de/home/bfs/bundesamt-statistik/rechtliche-hinweise.html" target="_blank">Rechtliche Hinweise</a></li>
+                    <li><a href="https://github.com/i14y-ch" target="_blank">Github</a></li>
+                    <li><a href="https://www.linkedin.com/showcase/i14y/about/" target="_blank">LinkedIn</a></li>
+                    <li><a href="https://apiconsole.i14y.admin.ch/" target="_blank">API</a></li>
+                </ul>
+            </div>
+            <div class="footer-info">
+                <p>© 2025 Bundesamt für Statistik</p>
+            </div>
+        </div>
+    </footer>
 </body>
 </html>
