@@ -70,7 +70,7 @@ class KeywordGenerator:
         except ImportError:
             logging.info("spacy not available - using regex-based extraction")
 
-    def _extract_keywords_openai(self, text, max_keywords=5, language='de'):
+    def _extract_keywords_openai(self, text, max_keywords=6, language='de'):
         """Extract keywords using OpenAI API (preferred method for better results).
         
         Args:
@@ -91,20 +91,31 @@ class KeywordGenerator:
             lang_names = {'de': 'German', 'en': 'English', 'fr': 'French', 'it': 'Italian'}
             lang_name = lang_names.get(language, 'German')
             
-            prompt = f"""Extract up to {max_keywords} main keywords or key phrases from the following {lang_name} text. 
-Return only the keywords/phrases, one per line, without numbering or explanations.
-Focus on important domain-specific terms and concepts.
+            prompt = f"""You are an expert in energy supply terminology. Extract the {max_keywords} most relevant domain-specific keywords or key phrases from the following {lang_name} text.
+- Prioritize energy, gas flow, infrastructure, and fuel terms.
+- Return a compact JSON array of unique keywords in {lang_name}.
+- Keep nouns/compounds (max 3 words each). No explanations, no numbering.
 
-Text: {text[:1000]}"""
+Text: {text[:1200]}"""
             
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=200
+                temperature=0.2,
+                max_tokens=180
             )
-            
-            keywords = [k.strip() for k in response.choices[0].message.content.split('\n') if k.strip()]
+
+            raw = response.choices[0].message.content.strip()
+            keywords = []
+
+            # Prefer JSON array output; fall back to newline parsing if needed
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    keywords = [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                keywords = [line.strip() for line in raw.split('\n') if line.strip()]
+
             return keywords[:max_keywords]
         except Exception as e:
             logging.debug(f"OpenAI keyword extraction failed: {e}")
