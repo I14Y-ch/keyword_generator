@@ -38,6 +38,22 @@ app.config['CACHE_TYPE'] = 'SimpleCache'
 app.config['CACHE_DEFAULT_TIMEOUT'] = 300
 cache = Cache(app)
 
+# Create a global HTTP session for API requests with proper headers
+http_session = requests.Session()
+contact = os.environ.get('ADMIN_CONTACT', 'devteam@example.com')
+user_agent = f"I14Y-keyword-generator/1.0 (mailto:{contact})"
+http_session.headers.update({
+    'User-Agent': user_agent,
+    'Accept': 'application/json',
+    'From': contact
+})
+
+# Configure retries
+retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 502, 503, 504], allowed_methods=["GET", "POST"])
+adapter = HTTPAdapter(max_retries=retries)
+http_session.mount('https://', adapter)
+http_session.mount('http://', adapter)
+
 # Network environment configuration
 NETWORK_ENV = "external"  # Change to "external" for external networks
 
@@ -3005,7 +3021,7 @@ def upload_to_i14y():
         }
         
         # Step 1: GET the existing dataset
-        get_response = requests.get(i14y_url, headers=headers, timeout=30, verify=verify_ssl)
+        get_response = http_session.get(i14y_url, headers=headers, timeout=30, verify=verify_ssl)
         
         if not get_response.ok:
             return jsonify({
@@ -3139,7 +3155,7 @@ def upload_to_i14y():
             'data': dataset_data
         }
         
-        put_response = requests.put(i14y_url, headers=headers, json=put_payload, timeout=30, verify=verify_ssl)
+        put_response = http_session.put(i14y_url, headers=headers, json=put_payload, timeout=30, verify=verify_ssl)
         
         if put_response.ok:
             # Create the I14Y dataset link
@@ -3208,7 +3224,7 @@ def search_i14y_datasets():
         logging.info(f"Searching I14Y for: '{query}' (page {page}, size {page_size})")
         
         # Make request to I14Y search API
-        response = requests.get(i14y_search_url, params=params, timeout=10)
+        response = http_session.get(i14y_search_url, params=params, timeout=10)
         
         if not response.ok:
             logging.error(f"I14Y API error: {response.status_code} - {response.text}")
@@ -3388,7 +3404,7 @@ def get_i14y_object():
         url = f"{public_base}{endpoint_map[object_type]}/{object_id}"
 
         verify_ssl = NETWORK_ENV != "internal"
-        response = requests.get(url, timeout=10, verify=verify_ssl)
+        response = http_session.get(url, timeout=10, verify=verify_ssl)
 
         if not response.ok:
             logging.error(f"Failed to fetch I14Y object {object_type}:{object_id} ({env}): HTTP {response.status_code} - {response.text}")
@@ -3541,7 +3557,7 @@ def update_i14y_keywords():
         logging.debug(f"PUT URL: {partner_api_url}")
         logging.debug(f"Keywords payload: {json.dumps(formatted_keywords, indent=2)}")
         
-        response = requests.put(
+        response = http_session.put(
             partner_api_url,
             json=update_payload,
             headers=headers,
@@ -3598,7 +3614,7 @@ def get_i14y_organisations():
             'prod': "https://input-backend.i14y.c.bfs.admin.ch/api/Agent"
         }[env]
 
-        response = requests.get(agents_base, timeout=10)
+        response = http_session.get(agents_base, timeout=10)
         
         if not response.ok:
             logging.error(f"Failed to fetch organisations: HTTP {response.status_code}")
