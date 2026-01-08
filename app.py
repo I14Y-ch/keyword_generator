@@ -136,7 +136,16 @@ class KeywordGenerator:
             if publisher:
                 context_parts.append(f"Publisher: {publisher}")
             if themes and isinstance(themes, list):
-                context_parts.append(f"Thematic fields: {', '.join(themes)}")
+                # Handle themes as either strings or dicts
+                theme_strings = []
+                for t in themes:
+                    if isinstance(t, dict):
+                        theme_strings.append(t.get('name', ''))
+                    elif isinstance(t, str):
+                        theme_strings.append(t)
+                theme_strings = [s for s in theme_strings if s]  # Filter empty strings
+                if theme_strings:
+                    context_parts.append(f"Thematic fields: {', '.join(theme_strings)}")
             context = "\n".join(context_parts) if context_parts else ""
             
             prompt = f"""You are an expert taxonomist for Swiss public-sector and government data.
