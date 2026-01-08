@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 from html import unescape
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -18,7 +20,7 @@ except ImportError:
     logging.info("python-dotenv not installed - environment variables from .env won't be loaded")
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
@@ -62,7 +64,22 @@ class KeywordGenerator:
             self.nlp = spacy.load("de_core_news_md")
             logging.info("spaCy German model loaded for semantic similarity and NLP")
         except OSError:
-            logging.warning("spaCy model 'de_core_news_md' not found; falling back to lightweight keyword extraction")
+            logging.warning("spaCy model 'de_core_news_md' not found")
+            # Attempt to auto-download the model
+            try:
+                import subprocess
+                import sys
+                logging.info("Attempting to download spaCy German model...")
+                subprocess.check_call(
+                    [sys.executable, '-m', 'spacy', 'download', 'de_core_news_md'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                import spacy
+                self.nlp = spacy.load("de_core_news_md")
+                logging.info("✓ spaCy German model downloaded and loaded successfully")
+            except Exception as e:
+                logging.warning(f"Failed to auto-download spaCy model: {e}; falling back to lightweight keyword extraction")
 
     def _extract_keywords_from_text(self, text, max_keywords=5, nouns_only=False):
         """Extract representative keywords from free-form text using spaCy and regex fallbacks.
@@ -709,6 +726,47 @@ class KeywordGenerator:
 
         return content
 
+    def _search_wikipedia_title(self, query, lang_code, headers):
+        """Use the Wikipedia search API to find the best matching article title for a query."""
+        base_url = f"https://{lang_code}.wikipedia.org/w/api.php"
+        query = query.strip()
+        if not query:
+            return None
+
+        search_variants = [query]
+        if ' ' in query:
+            # Try an exact phrase search first to favor perfect matches for multi-word titles
+            search_variants.insert(0, f'"{query}"')
+
+        for search_term in search_variants:
+            params = {
+                'action': 'query',
+                'list': 'search',
+                'srsearch': search_term,
+                'format': 'json',
+                'srlimit': 1,
+                'srinfo': 'suggestion',
+                'srprop': ''
+            }
+
+            try:
+                resp = self.session.get(base_url, params=params, headers=headers, timeout=10, verify=self.verify_ssl)
+                if not resp.ok:
+                    logging.debug(f"Wikipedia search failed for '{search_term}' ({lang_code}): {resp.status_code}")
+                    continue
+
+                data = resp.json()
+                results = data.get('query', {}).get('search', [])
+                if results:
+                    title = results[0].get('title')
+                    if title:
+                        logging.debug(f"Wikipedia search matched '{query}' -> '{title}' ({lang_code})")
+                        return title
+            except Exception as e:
+                logging.debug(f"Wikipedia search error for '{search_term}' ({lang_code}): {e}")
+
+        return None
+
     def _validate_keywords_against_sources(self, candidates, limit=10):
         """Validate candidate keywords across TERMDAT, Wikidata, and GEMET."""
         validated = []
@@ -747,10 +805,15 @@ class KeywordGenerator:
         return validated
 
     def _get_wikipedia_keywords(self, query):
-        """Extract keywords from exact-match Wikipedia articles plus Switzerland-specific sections."""
+        """Extract keywords from exact or searched Wikipedia articles, including Switzerland sections."""
         query = query.strip()
-        if not query or ' ' in query:
-            logging.debug(f"Skipping Wikipedia extraction for multi-word query: '{query}'")
+        if not query:
+            return []
+
+        max_words = 6
+        word_count = len(query.split())
+        if word_count > max_words:
+            logging.debug(f"Skipping Wikipedia extraction for long query (> {max_words} words): '{query}'")
             return []
 
         wiki_languages = ['de', 'fr', 'it', 'en']
@@ -762,14 +825,44 @@ class KeywordGenerator:
         fallback_keywords = []
 
         for lang in wiki_languages:
-            try:
-                page_content = self._fetch_wikipedia_page_content(query, lang, headers)
-            except Exception as e:
-                logging.debug(f"Wikipedia fetch failed for '{query}' ({lang}): {e}")
-                page_content = None
+            page_content = None
+            tried_titles = set()
+
+            # Try the provided title as-is first
+            try_titles = [query]
+            if query and query[0].islower():
+                try_titles.append(query.title())
+
+            for candidate_title in try_titles:
+                normalized_title = candidate_title.strip()
+                if not normalized_title:
+                    continue
+                title_key = normalized_title.lower()
+                if title_key in tried_titles:
+                    continue
+                tried_titles.add(title_key)
+
+                try:
+                    page_content = self._fetch_wikipedia_page_content(normalized_title, lang, headers)
+                except Exception as e:
+                    logging.debug(f"Wikipedia fetch failed for '{normalized_title}' ({lang}): {e}")
+                    page_content = None
+
+                if page_content:
+                    break
+
+            # If direct lookup failed, fall back to Wikipedia search
+            if not page_content:
+                matched_title = self._search_wikipedia_title(query, lang, headers)
+                if matched_title and matched_title.lower() not in tried_titles:
+                    try:
+                        page_content = self._fetch_wikipedia_page_content(matched_title, lang, headers)
+                    except Exception as e:
+                        logging.debug(f"Wikipedia fetch failed for '{matched_title}' ({lang}): {e}")
+                        page_content = None
 
             if not page_content:
-                logging.debug(f"No exact Wikipedia article for '{query}' in language '{lang}'")
+                logging.debug(f"No Wikipedia article found for '{query}' in language '{lang}'")
                 continue
 
             summary_text = page_content['summary']
@@ -1857,49 +1950,6 @@ class KeywordGenerator:
             if batch['is_final']:
                 final_keywords = batch['keywords']
         return final_keywords
-    
-    def generate_keywords_old(self, query, query_lang='de', include_synonyms=True):
-        """Old implementation - kept for reference."""
-        all_keywords = []
-        
-        logging.info(f"Starting keyword generation (old) for: '{query[:100]}...' in language: {query_lang}")
-        
-        # Step 1: Extract keywords from the input text
-        extracted_keywords = self._extract_keywords_from_text(query, max_keywords=5)
-        logging.info(f"Extracted keywords: {extracted_keywords}")
-        
-        # Step 2: Search for each extracted keyword in vocabularies
-        for keyword in extracted_keywords:
-            logging.info(f"Searching vocabularies for keyword: '{keyword}'")
-            
-            # Add synonym support if enabled
-            if include_synonyms:
-                synonyms = self._get_synonym_queries(keyword)
-                logging.info(f"Including synonyms for '{keyword}': {synonyms}")
-            
-            # Priority 1: TERMDAT (multilingual) - with synonym support
-            termdat_results = self.search_termdat(keyword, query_lang, include_synonyms)
-            for result in termdat_results:
-                result['extracted_from'] = query if len(query.split()) > 3 else None
-                result['search_keyword'] = keyword
-            all_keywords.extend(termdat_results)
-            
-            # Priority 2: GEMET (multilingual)
-            gemet_results = self.search_gemet(keyword)
-            for result in gemet_results:
-                result['extracted_from'] = query if len(query.split()) > 3 else None
-                result['search_keyword'] = keyword
-            all_keywords.extend(gemet_results)
-            
-            # Priority 3: Wikidata (multilingual)
-            wikidata_results = self.search_wikidata(keyword)
-            for result in wikidata_results:
-                result['extracted_from'] = query if len(query.split()) > 3 else None
-                result['search_keyword'] = keyword
-            all_keywords.extend(wikidata_results)
-        
-        # Use the shared helper method for sorting and limiting
-        return self._apply_source_limits_and_sort(all_keywords, query)
     
     def generate_keywords_progressive(self, i14y_item, query_lang='de'):
         """Generate keywords using improved progressive algorithm for workflow 1.
