@@ -64,22 +64,8 @@ class KeywordGenerator:
             self.nlp = spacy.load("de_core_news_md")
             logging.info("spaCy German model loaded for semantic similarity and NLP")
         except OSError:
-            logging.warning("spaCy model 'de_core_news_md' not found")
-            # Attempt to auto-download the model
-            try:
-                import subprocess
-                import sys
-                logging.info("Attempting to download spaCy German model...")
-                subprocess.check_call(
-                    [sys.executable, '-m', 'spacy', 'download', 'de_core_news_md'],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                import spacy
-                self.nlp = spacy.load("de_core_news_md")
-                logging.info("✓ spaCy German model downloaded and loaded successfully")
-            except Exception as e:
-                logging.warning(f"Failed to auto-download spaCy model: {e}; falling back to lightweight keyword extraction")
+            logging.warning("spaCy model 'de_core_news_md' not found; falling back to lightweight keyword extraction")
+            logging.info("To use the spaCy German model, run: python -m spacy download de_core_news_md")
 
     def _extract_keywords_from_text(self, text, max_keywords=5, nouns_only=False):
         """Extract representative keywords from free-form text using spaCy and regex fallbacks.
