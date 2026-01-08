@@ -94,7 +94,7 @@ class KeywordGenerator:
             prompt = f"""You are an expert taxonomist for public-sector and government data. Extract the {max_keywords} most relevant domain-specific keywords or key phrases from the following {lang_name} text.
 - Applicable domains include administration, infrastructure, economy, environment, health, mobility, energy, statistics, and public services.
 - Return a compact JSON array of unique keywords in {lang_name}.
-- Keep nouns/compounds (max 3 words each). No explanations, no numbering.
+- Keep nouns/compounds (max 3 words each). Prioritize single words over compounds. No explanations, no numbering.
 
 Text: {text[:1200]}"""
             
