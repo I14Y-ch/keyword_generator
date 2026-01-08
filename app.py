@@ -3571,8 +3571,8 @@ def update_i14y_keywords():
         }
         
         logging.info(f"Updating {object_type} {object_id} on I14Y with {len(formatted_keywords)} keywords")
-        logging.debug(f"PUT URL: {partner_api_url}")
-        logging.debug(f"Keywords payload: {json.dumps(formatted_keywords, indent=2)}")
+        logging.info(f"PUT URL: {partner_api_url}")
+        logging.info(f"Full PUT payload:\n{json.dumps(update_payload, indent=2, ensure_ascii=False)}")
         
         response = http_session.put(
             partner_api_url,
