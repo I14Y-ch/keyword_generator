@@ -3531,6 +3531,14 @@ def update_i14y_keywords():
         # Update keywords in the payload
         update_data['keywords'] = formatted_keywords
         
+        # For dataservices/publicservices, ensure publisher is in IdentifierInputModel format
+        # (GET returns AgentModel with 'identifier' field, PUT expects IdentifierInputModel)
+        if object_type in ['dataservice', 'publicservice']:
+            if 'publisher' in update_data and isinstance(update_data['publisher'], dict):
+                # If publisher has 'identifier' as a nested field, flatten it
+                if 'identifier' in update_data['publisher']:
+                    update_data['publisher'] = {'identifier': update_data['publisher']['identifier']}
+        
         # Remove read-only fields that shouldn't be sent in PUT
         # These fields are returned by GET but should not be included in PUT
         readonly_fields = ['id', 'guid', 'publicationLevel', 'publicationLevelProposal', 
