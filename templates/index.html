@@ -34,7 +34,7 @@
 
         <div class="workflow-section">
             <h2 class="section-title">Generate Keywords</h2>
-            <p class="section-description">Enter a keyword or paste a longer text description. Keywords will be searched in TERMDAT, GEMET, and Wikidata vocabularies.</p>
+            <p class="section-description">Enter a keyword or paste a longer text description. Keywords will be searched in TERMDAT, GEMET, and Wikidata vocabularies. Compound words (e.g., "Umfahrungsstrasse") will be automatically decomposed and analyzed to find related terms.</p>
             
             <div class="search-container">
                 <textarea id="searchInput" class="search-input" rows="3"
@@ -43,8 +43,8 @@
                 <div class="search-options">
                     <label>
                         <input type="checkbox" id="includeSynonyms" checked>
-                        <span>Include synonyms and related terms</span>
-                        <span id="synonymInfoBtn" class="info-icon" title="To extract synonyms and related terms, enable this option. The content may been sent to external services like OpenAI for processing.">?</span>
+                        <span>Include synonyms, related terms, and compound word analysis</span>
+                        <span id="synonymInfoBtn" class="info-icon" title="To extract synonyms, related terms, and analyze compound words, enable this option. The content may be sent to external services like OpenAI for processing.">?</span>
                     </label>
                 </div>
                 <div class="button-group" style="display: flex; gap: 10px;">
@@ -123,12 +123,14 @@
                 <h3>Synonym Discovery & Related Terms</h3>
                 <p>This tool dynamically discovers synonyms and related terms using multiple intelligent sources:</p>
                 <ul>
-                    <li><strong>OpenAI (ChatGPT)</strong>: Primary source using GPT-3.5-turbo to generate contextually relevant German synonyms and related terms, validated against authoritative vocabularies.</li>
+                    <li><strong>Compound Word Analysis</strong>: German compound words (e.g., "Umfahrungsstrasse" → "Umfahrung" + "Strasse") are automatically decomposed using NLP to find keywords for each component part.</li>
+                    <li><strong>Related Term Discovery</strong>: For each keyword component, the system finds semantically related broader terms (e.g., "Strasse" → "Verkehr", "Infrastruktur").</li>
+                    <li><strong>OpenAI (ChatGPT)</strong>: Primary source using GPT-3.5-turbo to generate contextually relevant German synonyms, related terms, and to help decompose compound words.</li>
                     <li><strong>Wikidata relationships</strong>: Uses semantic properties like "subclass of", "part of" and aliases to find related concepts from the world's largest linked-data knowledge base.</li>
                     <li><strong>TERMDAT analysis</strong>: Finds related terms in the same Swiss Federal terminology collections and analyzes definitions for semantic similarity.</li>
                     <li><strong>Quality validation</strong>: All AI-generated candidates are verified against Wikidata and TERMDAT before inclusion; fallback to linked-data discovery if AI is unavailable.</li>
                 </ul>
-                <p><strong>Process:</strong> The system first asks ChatGPT for synonyms, validates them against authoritative sources, and falls back to semantic analysis if needed. Results discovered via synonym search are marked in the UI (green indicator).</p>
+                <p><strong>Process:</strong> The system first decomposes compound words, asks ChatGPT for synonyms and related terms for each component, validates them against authoritative sources, and falls back to semantic analysis if needed. Results discovered via synonym search or compound word analysis are marked in the UI (green/blue indicators).</p>
             </div>
         </div>
     </div>
@@ -276,34 +278,45 @@
 
                 // Next stage: querying backend services
                 setStatus('Querying TERMDAT, GEMET, and Wikidata...', 'termdat');
-                const response = await fetch('/search', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ 
-                        query: query,
-                        lang: 'de',  // Default to German as query language
-                        include_synonyms: includeSynonyms,
-                        direct_search: useDirectSearch && !includeSynonyms
-                    })
-                });
+                
+                // Use streaming API for progressive results
+                const useStreaming = true;
+                
+                if (useStreaming) {
+                    // Use streaming for progressive results
+                    await performStreamingSearch(query, includeSynonyms);
+                } else {
+                    // Fallback to regular fetch
+                    const response = await fetch('/search', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ 
+                            query: query,
+                            lang: 'de',  // Default to German as query language
+                            include_synonyms: includeSynonyms,
+                            direct_search: useDirectSearch && !includeSynonyms
+                        })
+                    });
 
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error('Server response error:', response.status, errorText);
-                    throw new Error(`Server error (${response.status}): ${errorText}`);
-                }
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.error('Server response error:', response.status, errorText);
+                        throw new Error(`Server error (${response.status}): ${errorText}`);
+                    }
 
-                try {
-                    const data = await response.json();
-                    setStatus('Rendering results...', 'rendering');
-                    displayResults(data);
-                    updateSearchHistory(query);
-                } catch (jsonError) {
-                    console.error('JSON parsing error:', jsonError);
-                    throw new Error('Failed to parse server response');
+                    try {
+                        const data = await response.json();
+                        setStatus('Rendering results...', 'rendering');
+                        displayResults(data);
+                        updateSearchHistory(query);
+                    } catch (jsonError) {
+                        console.error('JSON parsing error:', jsonError);
+                        throw new Error('Failed to parse server response');
+                    }
                 }
+                
             } catch (err) {
                 console.error('Search error:', err);
                 showError(err.message || 'Search failed. Please try again.');
@@ -312,6 +325,89 @@
                 // Clear the status after a short delay so users can see the final state
                 setTimeout(() => clearStatus(), 1200);
             }
+        }
+        
+        async function performStreamingSearch(query, includeSynonyms) {
+            let allKeywords = [];
+            let isFirstBatch = true;
+            
+            return new Promise((resolve, reject) => {
+                fetch('/search-stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        query: query,
+                        lang: 'de',
+                        include_synonyms: includeSynonyms
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Server error (${response.status})`);
+                    }
+                    
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    
+                    function processChunk() {
+                        reader.read().then(({ done, value }) => {
+                            if (done) {
+                                updateSearchHistory(query);
+                                resolve();
+                                return;
+                            }
+                            
+                            buffer += decoder.decode(value, { stream: true });
+                            const lines = buffer.split('\n\n');
+                            buffer = lines.pop(); // Keep incomplete line in buffer
+                            
+                            for (const line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    try {
+                                        const data = JSON.parse(line.substring(6));
+                                        
+                                        console.log('Received batch:', data.batch, 'Keywords:', data.total);
+                                        
+                                        if (data.error) {
+                                            reject(new Error(data.error));
+                                            return;
+                                        }
+                                        
+                                        if (isFirstBatch) {
+                                            console.log('Displaying first batch - exact matches');
+                                            setStatus('Showing exact matches...', 'success');
+                                            isFirstBatch = false;
+                                            showResults();
+                                        } else if (data.batch === 'with_synonyms') {
+                                            console.log('Updating with synonym results');
+                                            setStatus('Adding synonym-based results...', 'synonyms');
+                                        }
+                                        
+                                        // Display progressive results
+                                        displayResults({
+                                            query: query,
+                                            keywords: data.keywords,
+                                            total: data.total,
+                                            is_final: data.is_final
+                                        });
+                                        
+                                    } catch (e) {
+                                        console.error('Error parsing SSE data:', e, 'Line:', line);
+                                    }
+                                }
+                            }
+                            
+                            processChunk();
+                        }).catch(reject);
+                    }
+                    
+                    processChunk();
+                })
+                .catch(reject);
+            });
         }
 
         window.toggleKeywordSelection = function(cardId, keywordData) {
@@ -444,7 +540,7 @@
                         
                         return `
                             <div class="keyword-card ${keyword.is_synonym_result ? 'synonym-result' : ''}" id="keyword-${index}" onclick="toggleKeywordSelection('keyword-${index}', window.keywordsData[${index}])">
-                                <div class="keyword-source ${keyword.source.toLowerCase()}">${keyword.source}</div>
+                                <div class="keyword-source source-${keyword.source.toLowerCase()}">${keyword.source}</div>
                                 <div class="keyword-label">${displayLabel}</div>
                                 ${extractedIndicator}
                                 ${synonymIndicator}

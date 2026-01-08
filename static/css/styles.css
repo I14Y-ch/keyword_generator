@@ -416,13 +416,18 @@ main {
 }
 
 .keyword-source {
-    font-size: 0.8em;
-    font-weight: 600;
+    font-size: 0.9em;
+    font-weight: 700;
     color: white;
-    padding: 4px 8px;
-    border-radius: 4px;
+    padding: 6px 10px;
+    border-radius: 6px;
     display: inline-block;
     width: fit-content;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    margin-bottom: 8px;
+    align-self: flex-start;
 }
 
 .keyword-source.source-termdat { background: #059669; }

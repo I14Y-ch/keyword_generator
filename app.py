@@ -1,12 +1,21 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, Response, stream_with_context
 from flask_caching import Cache
 import requests
 import json
 import logging
 import os
 import re
+from html import unescape
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logging.info(".env file loaded")
+except ImportError:
+    logging.info("python-dotenv not installed - environment variables from .env won't be loaded")
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -45,155 +54,326 @@ class KeywordGenerator:
         
         # OpenAI API key for keyword extraction (optional)
         self.openai_api_key = os.environ.get('OPENAI_API_KEY')
-
-    def _extract_keywords_from_text(self, text, max_keywords=5):
-        """Extract relevant keywords from a longer text description.
-        Uses OpenAI if available, otherwise falls back to simple NLP techniques.
         
-        Args:
-            text: The input text (could be single word or multiple sentences)
-            max_keywords: Maximum number of keywords to extract
-            
-        Returns:
-            list: List of extracted keywords
-        """
-        # If text is short (likely a single keyword), return it as-is
-        if len(text.split()) <= 3:
-            return [text.strip()]
-        
-        logging.info(f"Extracting keywords from text: '{text[:100]}...'")
-        
-        # Try OpenAI first if API key is available
-        if self.openai_api_key:
-            try:
-                keywords = self._extract_keywords_with_openai(text, max_keywords)
-                if keywords:
-                    logging.info(f"Extracted keywords via OpenAI: {keywords}")
-                    return keywords
-            except Exception as e:
-                logging.warning(f"OpenAI keyword extraction failed: {e}, falling back to NLP")
-        
-        # Fallback to simple NLP-based extraction
-        keywords = self._extract_keywords_with_nlp(text, max_keywords)
-        logging.info(f"Extracted keywords via NLP: {keywords}")
-        return keywords
-    
-    def _extract_keywords_with_openai(self, text, max_keywords=5):
-        """Extract keywords using OpenAI GPT model"""
+        # Initialize spaCy for semantic similarity and NLP tasks
+        self.nlp = None
         try:
-            import openai
-            openai.api_key = self.openai_api_key
-            
-            prompt = f"""Extract the {max_keywords} most important keywords or key phrases from the following text. 
-The keywords should be relevant for searching in controlled vocabularies like TERMDAT, GEMET, or Wikidata.
-Return ONLY the keywords, one per line, without numbering or explanation.
-Focus on domain-specific terms, concepts, and important nouns.
+            import spacy
+            self.nlp = spacy.load("de_core_news_md")
+            logging.info("spaCy German model loaded for semantic similarity and NLP")
+        except OSError:
+            logging.warning("spaCy model 'de_core_news_md' not found; falling back to lightweight keyword extraction")
 
-Text: {text}
+    def _extract_keywords_from_text(self, text, max_keywords=5, nouns_only=False):
+        """Extract representative keywords from free-form text using spaCy and regex fallbacks.
 
-Keywords:"""
-            
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a keyword extraction expert for Swiss government data catalogs."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=200
-            )
-            
-            content = response.choices[0].message.content.strip()
-            keywords = [kw.strip() for kw in content.split('\n') if kw.strip()]
-            
-            # Filter out very short keywords and limit to max_keywords
-            keywords = [kw for kw in keywords if len(kw) > 2][:max_keywords]
-            
-            return keywords if keywords else None
-            
-        except ImportError:
-            logging.info("OpenAI library not installed")
-            return None
-        except Exception as e:
-            logging.error(f"OpenAI API error: {e}")
-            return None
-    
-    def _extract_keywords_with_nlp(self, text, max_keywords=5):
-        """Extract keywords using simple NLP techniques (frequency analysis, stopwords, etc.)"""
-        # German stopwords (common words to ignore)
-        german_stopwords = {
-            'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer', 'eines', 'einem', 'einen',
-            'und', 'oder', 'aber', 'als', 'bei', 'bis', 'durch', 'für', 'gegen', 'in', 'mit', 'nach',
-            'über', 'um', 'von', 'vor', 'zu', 'zum', 'zur', 'im', 'am', 'an', 'auf', 'aus', 'bei',
-            'ist', 'sind', 'war', 'waren', 'wird', 'werden', 'wurde', 'wurden', 'hat', 'haben',
-            'nicht', 'nur', 'noch', 'auch', 'wenn', 'wie', 'was', 'wo', 'wer', 'alle', 'diese',
-            'dieser', 'dieses', 'jede', 'jeder', 'jedes', 'sein', 'seine', 'ihr', 'ihre',
-            'sich', 'sie', 'er', 'es', 'wir', 'uns', 'euch', 'ihnen', 'mein', 'dein',
-            'kann', 'könnte', 'muss', 'sollte', 'möchte', 'soll', 'sehr', 'mehr', 'viel'
+        Args:
+            text (str): Input text to analyze
+            max_keywords (int): Maximum number of keywords to return
+            nouns_only (bool): If True, only return noun/proper-noun tokens
+        """
+        if not text:
+            return []
+
+        text = text.strip()
+        if not text:
+            return []
+
+        # For very short inputs, just return the cleaned text
+        if len(text.split()) <= 3:
+            return [text]
+
+        stopwords = {
+            'der', 'die', 'das', 'und', 'oder', 'sowie', 'mit', 'auf', 'für', 'von', 'den', 'im', 'in', 'am',
+            'ein', 'eine', 'einer', 'einem', 'ist', 'sind', 'war', 'waren', 'werden', 'wird', 'als', 'bei',
+            'nach', 'über', 'auch', 'sich', 'dass', 'nicht', 'kein', 'nur', 'aber'
         }
-        
-        # Clean and tokenize text
-        text_lower = text.lower()
-        # Remove punctuation and split into words
-        words = re.findall(r'\b[a-zäöüß]+\b', text_lower)
-        
-        # Filter out stopwords and short words
-        meaningful_words = [
-            word for word in words 
-            if word not in german_stopwords and len(word) > 3
-        ]
-        
-        # Count word frequencies
-        from collections import Counter
-        word_freq = Counter(meaningful_words)
-        
-        # Get most common words
-        top_words = [word for word, count in word_freq.most_common(max_keywords * 2)]
-        
-        # Also look for multi-word phrases (bigrams, trigrams)
-        phrases = self._extract_phrases(text, german_stopwords)
-        
-        # Combine single words and phrases, prioritize phrases
-        keywords = phrases[:max_keywords // 2] + top_words[:max_keywords]
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_keywords = []
-        for kw in keywords:
-            if kw.lower() not in seen:
-                seen.add(kw.lower())
-                unique_keywords.append(kw)
-        
-        return unique_keywords[:max_keywords]
-    
-    def _extract_phrases(self, text, stopwords):
-        """Extract meaningful multi-word phrases from text"""
+        noun_stopwords = stopwords.union({'bearbeiten', 'quelltext', 'abschnitt', 'kapitel', 'erscheinungsdatum',
+                                          'einbezogen'})
+
+        keywords = []
+        candidate_phrases = []
+        noun_pos_tags = {'NOUN', 'PROPN'}
+
+        # Use spaCy when available for noun chunks and named entities
+        if self.nlp:
+            try:
+                doc = self.nlp(text)
+                if not nouns_only:
+                    for chunk in doc.noun_chunks:
+                        chunk_text = chunk.text.strip()
+                        if len(chunk_text.split()) <= 5 and len(chunk_text) > 2:
+                            candidate_phrases.append(chunk_text)
+
+                    for ent in doc.ents:
+                        ent_text = ent.text.strip()
+                        if len(ent_text) > 2:
+                            candidate_phrases.append(ent_text)
+
+                for token in doc:
+                    if token.pos_ in noun_pos_tags and not token.is_stop:
+                        token_text = token.text.strip()
+                        if len(token_text) > 2 and token_text.isalpha():
+                            keywords.append(token_text)
+            except Exception as e:
+                logging.debug(f"spaCy keyword extraction failed, falling back to regex heuristics: {e}")
+
+        # Regex fallback for phrases (capitalized spans or quoted phrases)
         phrases = []
-        
-        # Split into sentences
         sentences = re.split(r'[.!?]+', text)
-        
         for sentence in sentences:
-            # Look for capitalized phrases (likely proper nouns or important concepts)
-            capitalized = re.findall(r'\b[A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)+\b', sentence)
-            phrases.extend(capitalized)
-            
-            # Look for quoted phrases
+            if nouns_only:
+                capitalized_single = re.findall(r'\b[A-ZÄÖÜ][a-zäöüß]{2,}\b', sentence)
+                phrases.extend(capitalized_single)
+            else:
+                capitalized = re.findall(r'\b[A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)+\b', sentence)
+                phrases.extend(capitalized)
             quoted = re.findall(r'"([^"]+)"', sentence)
             phrases.extend(quoted)
-        
-        # Filter out very long phrases and those with stopwords
+
         filtered_phrases = []
         for phrase in phrases:
             words = phrase.lower().split()
-            if 2 <= len(words) <= 4:  # 2-4 word phrases
-                # Check if not mostly stopwords
-                meaningful = [w for w in words if w not in stopwords and len(w) > 2]
-                if len(meaningful) >= len(words) / 2:
-                    filtered_phrases.append(phrase)
-        
-        return filtered_phrases[:5]  # Return top 5 phrases
+            if nouns_only:
+                # Only keep single nouns in fallback mode when spaCy unavailable
+                if len(words) == 1 and words[0] not in stopwords:
+                    filtered_phrases.append(phrase.strip())
+            else:
+                if 2 <= len(words) <= 4:
+                    meaningful = [w for w in words if w not in stopwords and len(w) > 2]
+                    if len(meaningful) >= len(words) / 2:
+                        filtered_phrases.append(phrase.strip())
 
+        if not nouns_only:
+            candidate_phrases.extend(filtered_phrases)
+        else:
+            # When nouns_only=True we only keep single-word candidates from fallback
+            for phrase in filtered_phrases:
+                if ' ' not in phrase:
+                    keywords.append(phrase)
+
+        # Token-based fallback if we still have few candidates
+        if len(keywords) + len(candidate_phrases) < max_keywords and not self.nlp:
+            tokens = re.findall(r'[A-Za-zÄÖÜäöüß-]{3,}', text)
+            for token in tokens:
+                lower = token.lower()
+                if lower in stopwords:
+                    continue
+                if nouns_only and not token[:1].isupper():
+                    continue
+                keywords.append(token.capitalize())
+
+        # Merge phrases and keywords while preserving order and removing duplicates
+        combined = candidate_phrases + keywords
+        seen = set()
+        unique = []
+        for item in combined:
+            normalized = item.strip()
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if nouns_only:
+                normalized_alpha = normalized.replace('-', '')
+                if not normalized_alpha.isalpha():
+                    continue
+                if not normalized[0].isupper():
+                    continue
+                if key in noun_stopwords:
+                    continue
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(normalized)
+            if len(unique) >= max_keywords:
+                break
+
+        return unique
+
+    def _split_compound_words(self, word, depth=0, max_depth=2):
+        """Split German compound words into their component parts using heuristics and spaCy.
+        Now supports recursive splitting for multi-part compounds.
+        
+        Example: 'Umfahrungsstrasse' -> ['Umfahrung', 'Strasse']
+        Example: 'Strassenbelag' -> ['Strasse', 'Belag']
+        Example: 'Skirennfahrerin' -> ['Ski', 'Renn', 'Fahrerin']
+        
+        Args:
+            word: German compound word to split
+            depth: Current recursion depth (internal)
+            max_depth: Maximum recursion depth to prevent infinite loops
+            
+        Returns:
+            list: List of component words (or [word] if splitting not available/fails)
+        """
+        # Only split if word is long enough and likely a compound
+        # At top level, require minimum 8 chars; at deeper levels allow 6+
+        min_word_len = 8 if depth == 0 else 6
+        if len(word) < min_word_len or depth >= max_depth:
+            return [word]
+        
+        try:
+            word_lower = word.lower()
+            components = []
+            
+            # Strategy 1a: Check for common word parts at the END (with connectors)
+            # Sort by length descending to try longest matches first
+            connectors = ['s', 'es', 'n', 'en', 'er', 'e', '']  # Empty string for no connector
+            for part in sorted(self.common_word_parts, key=len, reverse=True):
+                # Try with connectors at the end
+                for connector in connectors:
+                    search_pattern = connector + part
+                    if word_lower.endswith(search_pattern) and len(word_lower) > len(search_pattern):
+                        prefix_len = len(word) - len(search_pattern)
+                        prefix = word[:prefix_len]
+                        suffix = word[prefix_len + len(connector):]  # Skip the connector
+                        
+                        # Only split if prefix is meaningful
+                        # At deeper levels, allow shorter parts (>= 3) to catch words like "Ski", "Renn"
+                        min_prefix_len = 3 if depth > 0 else 4
+                        min_suffix_len = 3
+                        if len(prefix) >= min_prefix_len and len(suffix) >= min_suffix_len:
+                            # Recursively split the prefix if it's still long enough
+                            prefix_parts = self._split_compound_words(prefix, depth + 1, max_depth)
+                            components = prefix_parts + [suffix.capitalize()]
+                            logging.info(f"Split compound word '{word}' into: {components} (suffix match, depth={depth})")
+                            return components
+            
+            # Strategy 1b: Check for common word parts at the BEGINNING (with connectors)
+            # Sort by length descending to try longest matches first
+            for part in sorted(self.common_word_parts, key=len, reverse=True):
+                # Try with connectors at the beginning
+                for connector in connectors:
+                    search_pattern = part + connector
+                    if word_lower.startswith(search_pattern) and len(word_lower) > len(search_pattern):
+                        prefix = word[:len(part)]  # Get the common part without connector
+                        suffix_start = len(search_pattern)
+                        suffix = word[suffix_start:]
+                        
+                        # Only split if both parts are meaningful
+                        # At deeper levels, allow shorter prefixes (>= 3) to catch words like "Ski"
+                        min_prefix_len = 3 if depth > 0 else 4
+                        min_suffix_len = 3 if depth > 0 else 4
+                        if len(prefix) >= min_prefix_len and len(suffix) >= min_suffix_len:
+                            # Recursively split the suffix if it's still long enough
+                            suffix_parts = self._split_compound_words(suffix, depth + 1, max_depth)
+                            components = [prefix.capitalize()] + suffix_parts
+                            logging.info(f"Split compound word '{word}' into: {components} (prefix match, depth={depth})")
+                            return components
+                            suffix_parts = self._split_compound_words(suffix, depth + 1, max_depth)
+                            components = [prefix.capitalize()] + suffix_parts
+                            logging.info(f"Split compound word '{word}' into: {components} (prefix match, depth={depth})")
+                            return components
+            
+            # Strategy 2: Use spaCy for morphological analysis
+            if self.nlp:
+                doc = self.nlp(word)
+                if doc and len(doc) > 0:
+                    token = doc[0]
+                    # Check if spaCy identifies it as a compound noun
+                    if token.pos_ == "NOUN" and "-" in word:
+                        # Already hyphenated, just split on hyphen
+                        parts = word.split("-")
+                        if len(parts) > 1:
+                            components = [p.capitalize() for p in parts if len(p) > 2]
+                            if len(components) > 1:
+                                logging.info(f"Split hyphenated compound '{word}' into: {components}")
+                                return components
+            
+            # If no split found, return original word
+            return [word]
+                
+        except Exception as e:
+            logging.debug(f"Failed to split compound word '{word}': {e}")
+            return [word]
+    
+    def _find_related_words(self, word, limit=3, min_similarity=0.6):
+        """Find semantically related words using word embeddings.
+        
+        Example: 'Strasse' -> ['Verkehr', 'Autobahn', 'Fahrbahn']
+        
+        Args:
+            word: Input word to find related terms for
+            limit: Maximum number of related words to return
+            min_similarity: Minimum cosine similarity threshold (0-1)
+            
+        Returns:
+            list: List of related words
+        """
+        if not self.nlp:
+            return []
+        
+        try:
+            # Process the input word to get its word vector
+            doc = self.nlp(word.lower())
+            if not doc or not doc.vector_norm:
+                logging.debug(f"No word vector found for '{word}'")
+                return []
+            
+            # Get the word's vector
+            word_vector = doc.vector
+            
+            # Define a comprehensive list of potentially related terms to check
+            # Expanded context terms for better semantic coverage
+            context_terms = {
+                'strasse': ['verkehr', 'autobahn', 'fahrbahn', 'strassenverkehr', 'infrastruktur', 
+                           'verkehrsweg', 'fahrzeug', 'transport', 'strassenbau', 'mobilität'],
+                'haus': ['gebäude', 'immobilie', 'wohnung', 'bauwerk', 'architektur', 
+                        'wohnhaus', 'bau', 'konstruktion', 'wohnraum'],
+                'wasser': ['gewässer', 'fluss', 'see', 'hydro', 'aqua', 'wasserkraft', 
+                          'wasserversorgung', 'gewässerschutz', 'hydrologie'],
+                'verkehr': ['transport', 'mobilität', 'fahrzeug', 'strasse', 'infrastruktur',
+                           'beförderung', 'logistik', 'verkehrsmittel', 'verkehrswesen'],
+                'schule': ['bildung', 'unterricht', 'lernen', 'ausbildung', 'pädagogik',
+                          'bildungswesen', 'schulwesen', 'erziehung', 'lehre'],
+                'arbeit': ['beschäftigung', 'beruf', 'erwerbstätigkeit', 'job', 'arbeitsplatz',
+                          'arbeitswelt', 'berufstätigkeit', 'anstellung', 'tätigkeit'],
+                'gesundheit': ['medizin', 'pflege', 'krankheit', 'therapie', 'heilung',
+                              'gesundheitswesen', 'medizinisch', 'ärztlich', 'gesundheitsversorgung'],
+                'umfahrung': ['verkehr', 'strasse', 'umleitung', 'verkehrsführung', 'strassenführung'],
+                'stadt': ['gemeinde', 'ortschaft', 'kommune', 'stadtgebiet', 'urban', 'städtisch'],
+                'land': ['region', 'gebiet', 'landschaft', 'territorium', 'bezirk', 'ländlich'],
+                'bahn': ['eisenbahn', 'zug', 'schiene', 'verkehrsmittel', 'transport', 'bahnverkehr'],
+                'platz': ['ort', 'fläche', 'areal', 'standort', 'bereich', 'raum']
+            }
+            
+            # Check if we have predefined related terms
+            word_lower = word.lower()
+            candidate_terms = set()
+            
+            # Direct lookup
+            if word_lower in context_terms:
+                candidate_terms.update(context_terms[word_lower])
+            
+            # Search for partial matches
+            for key_word, related in context_terms.items():
+                if word_lower in related or key_word in word_lower or word_lower in key_word:
+                    candidate_terms.update(related)
+                    candidate_terms.add(key_word)
+            
+            # Calculate similarity for candidate terms
+            similar_words = []
+            for candidate in candidate_terms:
+                if candidate == word_lower:
+                    continue
+                    
+                candidate_doc = self.nlp(candidate)
+                if candidate_doc and candidate_doc.vector_norm:
+                    similarity = doc.similarity(candidate_doc)
+                    if similarity >= min_similarity:
+                        similar_words.append((candidate, similarity))
+            
+            # Sort by similarity and return top results
+            similar_words.sort(key=lambda x: x[1], reverse=True)
+            results = [word.capitalize() for word, sim in similar_words[:limit]]
+            
+            if results:
+                logging.info(f"Found related words for '{word}': {results}")
+            
+            return results
+            
+        except Exception as e:
+            logging.debug(f"Failed to find related words for '{word}': {e}")
+            return []
     def _discover_synonyms_from_wikidata(self, query, limit=3):
         """Discover synonyms and related terms using Wikidata's linked data relationships"""
         synonyms = set()
@@ -444,10 +624,200 @@ Keywords:"""
             logging.debug(f"TERMDAT existence check failed for '{candidate}': {e}")
         return False
 
+    def _clean_html_text(self, html_fragment):
+        """Convert an HTML fragment returned by Wikipedia into readable text."""
+        if not html_fragment:
+            return ''
+
+        cleaned = re.sub(r'<(script|style).*?>.*?</\\1>', ' ', html_fragment, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = re.sub(r'<[^>]+>', ' ', cleaned)
+        cleaned = unescape(cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned
+
+    def _fetch_wikipedia_page_content(self, query, lang_code, headers):
+        """Fetch summary and Switzerland-specific section for an exact Wikipedia title or redirect."""
+        base_url = f"https://{lang_code}.wikipedia.org/w/api.php"
+
+        params = {
+            'action': 'query',
+            'titles': query,
+            'redirects': 1,
+            'prop': 'extracts',
+            'format': 'json',
+            'explaintext': 1,
+            'exintro': 1
+        }
+
+        resp = self.session.get(base_url, params=params, headers=headers, timeout=10, verify=self.verify_ssl)
+        if not resp.ok:
+            logging.debug(f"Wikipedia title lookup failed for '{query}' ({lang_code}): {resp.status_code}")
+            return None
+
+        data = resp.json()
+        pages = data.get('query', {}).get('pages', {})
+        if not pages:
+            return None
+
+        page = next(iter(pages.values()))
+        if 'missing' in page:
+            return None
+
+        title = page.get('title')
+        summary_text = (page.get('extract') or '').strip()
+        if not summary_text:
+            return None
+
+        content = {'title': title, 'summary': summary_text, 'swiss': ''}
+
+        try:
+            sections_params = {
+                'action': 'parse',
+                'page': title,
+                'prop': 'sections',
+                'format': 'json',
+                'redirects': 1
+            }
+            sections_resp = self.session.get(base_url, params=sections_params, headers=headers, timeout=10, verify=self.verify_ssl)
+            if sections_resp.ok:
+                sections_data = sections_resp.json()
+                sections = sections_data.get('parse', {}).get('sections', [])
+                swiss_keywords = ['schweiz', 'switzerland', 'suisse', 'svizzera', 'svizra']
+                swiss_section_index = None
+                for section in sections:
+                    line = section.get('line', '')
+                    if any(key in line.lower() for key in swiss_keywords):
+                        swiss_section_index = section.get('index')
+                        break
+
+                if swiss_section_index:
+                    section_params = {
+                        'action': 'parse',
+                        'page': title,
+                        'section': swiss_section_index,
+                        'prop': 'text',
+                        'format': 'json',
+                        'redirects': 1
+                    }
+                    section_resp = self.session.get(base_url, params=section_params, headers=headers, timeout=10, verify=self.verify_ssl)
+                    if section_resp.ok:
+                        section_data = section_resp.json()
+                        html_fragment = section_data.get('parse', {}).get('text', {}).get('*')
+                        content['swiss'] = self._clean_html_text(html_fragment)
+        except Exception as e:
+            logging.debug(f"Failed to fetch Switzerland section for '{title}' ({lang_code}): {e}")
+
+        return content
+
+    def _validate_keywords_against_sources(self, candidates, limit=10):
+        """Validate candidate keywords across TERMDAT, Wikidata, and GEMET."""
+        validated = []
+        seen = set()
+
+        for cand in candidates:
+            cand_clean = cand.strip()
+            if not cand_clean or len(cand_clean) < 3:
+                continue
+
+            cand_key = cand_clean.lower()
+            if cand_key in seen:
+                continue
+
+            try:
+                found = False
+                if self._termdat_candidate_exists(cand_clean):
+                    found = True
+                if not found:
+                    wd_results = self.search_wikidata(cand_clean)
+                    if wd_results:
+                        found = True
+                if not found:
+                    gemet_results = self.search_gemet(cand_clean)
+                    if gemet_results:
+                        found = True
+
+                if found:
+                    validated.append(cand_clean)
+                    seen.add(cand_key)
+                    if len(validated) >= limit:
+                        break
+            except Exception as e:
+                logging.debug(f"Error validating candidate '{cand_clean}': {e}")
+
+        return validated
+
+    def _get_wikipedia_keywords(self, query):
+        """Extract keywords from exact-match Wikipedia articles plus Switzerland-specific sections."""
+        query = query.strip()
+        if not query or ' ' in query:
+            logging.debug(f"Skipping Wikipedia extraction for multi-word query: '{query}'")
+            return []
+
+        wiki_languages = ['de', 'fr', 'it', 'en']
+        headers = {
+            'User-Agent': self.session.headers.get('User-Agent', 'keyword-generator/1.0'),
+            'Accept': 'application/json'
+        }
+
+        fallback_keywords = []
+
+        for lang in wiki_languages:
+            try:
+                page_content = self._fetch_wikipedia_page_content(query, lang, headers)
+            except Exception as e:
+                logging.debug(f"Wikipedia fetch failed for '{query}' ({lang}): {e}")
+                page_content = None
+
+            if not page_content:
+                logging.debug(f"No exact Wikipedia article for '{query}' in language '{lang}'")
+                continue
+
+            summary_text = page_content['summary']
+            swiss_text = page_content.get('swiss', '') or ''
+
+            logging.info(f"Extracting keywords from Wikipedia article '{page_content['title']}' ({lang})")
+            summary_keywords = self._extract_keywords_from_text(summary_text, max_keywords=8, nouns_only=True)
+            swiss_keywords = []
+            if swiss_text.strip():
+                swiss_keywords = self._extract_keywords_from_text(swiss_text, max_keywords=20, nouns_only=True)
+
+            # Prioritize Swiss section nouns so terms like Polizei/Feuerwehr survive truncation
+            raw_keywords = swiss_keywords + summary_keywords
+
+            unique_keywords = []
+            seen = set()
+            for kw in raw_keywords:
+                kw_clean = kw.strip()
+                if not kw_clean:
+                    continue
+                kw_lower = kw_clean.lower()
+                if kw_lower not in seen:
+                    seen.add(kw_lower)
+                    unique_keywords.append(kw_clean)
+
+            if not unique_keywords:
+                continue
+
+            validated = self._validate_keywords_against_sources(unique_keywords, limit=10)
+            if validated:
+                logging.info(f"Validated Wikipedia keywords for '{query}' ({lang}): {validated}")
+                return validated
+
+            if not fallback_keywords:
+                fallback_keywords = unique_keywords[:10]
+
+        if fallback_keywords:
+            logging.info(f"Returning fallback Wikipedia keywords for '{query}': {fallback_keywords}")
+            return fallback_keywords
+
+        logging.debug(f"No Wikipedia keywords derived for '{query}'")
+        return []
+
     def _get_synonym_queries(self, query):
         """Get synonym queries using an LLM (OpenAI) when available, then validate candidates
         against Wikidata and TERMDAT. Falls back to linked-data discovery if needed.
         Implements a simple cache to avoid repeated identical network/LLM calls.
+        Enhanced to handle compound words by splitting them and finding related terms.
         """
         query = query.strip()
 
@@ -462,14 +832,39 @@ Keywords:"""
             logging.debug(f"Synonym cache read failed for '{query}': {e}")
 
         candidates = []
+        
+        # Step 0: For single-word queries, try extracting keywords from Wikipedia
+        if ' ' not in query:
+            wiki_keywords = self._get_wikipedia_keywords(query)
+            if wiki_keywords:
+                logging.info(f"Found {len(wiki_keywords)} keywords from Wikipedia for '{query}': {wiki_keywords}")
+                candidates.extend(wiki_keywords)
+        
+        # Step 1: Try to split compound words and add components as candidates
+        compound_parts = self._split_compound_words(query)
+        if len(compound_parts) > 1:
+            logging.info(f"Split compound word '{query}' into parts: {compound_parts}")
+            # Add the parts themselves as candidates
+            candidates.extend(compound_parts)
+            
+            # Find related words for each component
+            for part in compound_parts:
+                related = self._find_related_words(part, limit=2, min_similarity=0.45)
+                candidates.extend(related)
+                logging.info(f"Found related words for '{part}': {related}")
 
         # Try OpenAI if API key is available
         openai_key = os.environ.get('OPENAI_API_KEY')
         if openai_key:
+            logging.info(f"OpenAI API key found, calling API for '{query}'")
             try:
+                # Enhanced prompt to ask for component words and related terms
                 prompt = (
-                    f"Provide up to 5 German synonyms or closely related short phrases for the term: '{query}'. "
-                    "Return the result as a JSON array of strings only. Prefer single-word synonyms when possible."
+                    f"For the German term '{query}': "
+                    f"1) If it's a compound word, list its component words. "
+                    f"2) Provide closely related terms and synonyms. "
+                    "Return up to 5 short German terms as a JSON array of strings. "
+                    "Prefer single words when possible."
                 )
 
                 headers = {
@@ -483,7 +878,7 @@ Keywords:"""
                         {'role': 'user', 'content': prompt}
                     ],
                     'max_tokens': 200,
-                    'temperature': 0.2,
+                    'temperature': 0.3,
                     'n': 1
                 }
 
@@ -493,6 +888,7 @@ Keywords:"""
                     text = ''
                     try:
                         text = body['choices'][0]['message']['content']
+                        logging.info(f"OpenAI response for '{query}': {text}")
                     except Exception:
                         text = body.get('choices', [{}])[0].get('text', '')
 
@@ -500,18 +896,32 @@ Keywords:"""
                     try:
                         parsed = json.loads(text)
                         if isinstance(parsed, list):
-                            candidates = [s for s in parsed if isinstance(s, str)]
+                            candidates.extend([s for s in parsed if isinstance(s, str)])
+                            logging.info(f"OpenAI candidates for '{query}': {[s for s in parsed if isinstance(s, str)]}")
                     except Exception:
                         # Fallback: split by common separators and clean
                         parts = re.split('[,;\n\r]', text)
-                        candidates = [p.strip().strip('"\'') for p in parts if p.strip()]
+                        candidates.extend([p.strip().strip('"\'') for p in parts if p.strip()])
+                else:
+                    logging.warning(f"OpenAI API call failed for '{query}': Status {resp.status_code}")
 
             except Exception as e:
-                logging.debug(f"OpenAI synonym generation failed for '{query}': {e}")
+                logging.warning(f"OpenAI synonym generation failed for '{query}': {e}")
+        else:
+            logging.info(f"No OpenAI API key found - skipping AI synonym generation for '{query}'")
+
+        # Remove duplicates and the original query from candidates
+        unique_candidates = []
+        seen = set([query.lower()])
+        for cand in candidates:
+            cand_lower = cand.lower()
+            if cand_lower not in seen and len(cand) > 2:
+                seen.add(cand_lower)
+                unique_candidates.append(cand)
 
         # Validate candidates using Wikidata and TERMDAT; keep those that are found in at least one
         validated = []
-        for cand in candidates[:5]:  # only check up to 5 candidates from LLM to save calls
+        for cand in unique_candidates[:10]:  # check up to 10 candidates
             try:
                 found_in_wikidata = False
                 found_in_termdat = False
@@ -536,9 +946,9 @@ Keywords:"""
             except Exception as e:
                 logging.debug(f"Error validating candidate '{cand}': {e}")
 
-        # If no validated candidates from OpenAI, fall back to linked data discovery
+        # If no validated candidates from OpenAI/compound splitting, fall back to linked data discovery
         if not validated:
-            logging.debug(f"No validated OpenAI candidates for '{query}', falling back to linked-data discovery")
+            logging.debug(f"No validated candidates for '{query}', falling back to linked-data discovery")
             wikidata_synonyms = self._discover_synonyms_from_wikidata(query, limit=3)
             termdat_synonyms = self._discover_synonyms_from_termdat(query, limit=3)
             combined = list(dict.fromkeys(wikidata_synonyms + termdat_synonyms))
@@ -553,7 +963,7 @@ Keywords:"""
             return result
 
         # Return up to 5 validated synonyms and cache them
-        logging.debug(f"OpenAI validated synonyms for '{query}': {validated}")
+        logging.info(f"Validated synonyms/related terms for '{query}': {validated[:5]}")
         result = validated[:5]
         try:
             cache.set(cache_key, result, timeout=3600)  # 1 hour cache
@@ -680,6 +1090,18 @@ Keywords:"""
                                 # Require at least German and one other language from our core set (fr, it, en)
                                 core_languages = {'de', 'fr', 'it', 'en'}
                                 available_core_langs = set(multilingual_terms.keys()) & core_languages
+
+                                # Exclude entries where any title has more than 4 words
+                                has_long_title = False
+                                for lang_code, title in multilingual_terms.items():
+                                    word_count = len(title.split())
+                                    if word_count > 4:
+                                        logging.debug(f"Skipping TERMDAT entry {entry_id} - {lang_code} title has {word_count} words: '{title}'")
+                                        has_long_title = True
+                                        break
+                                
+                                if has_long_title:
+                                    continue
 
                                 if 'de' in available_core_langs and len(available_core_langs) >= 2:
                                     # Get collection info
@@ -1223,6 +1645,200 @@ Keywords:"""
         
         return i14y_keywords
 
+    def generate_keywords_streaming(self, query, query_lang='de', include_synonyms=True):
+        """Generate keywords with streaming support - yields results as they become available.
+        
+        Yields batches of keywords in this order:
+        1. Exact matches from all sources (without synonyms)
+        2. Synonym-based results
+        
+        Args:
+            query: Single keyword or longer description text
+            query_lang: Language code (de, fr, it, en)
+            include_synonyms: Whether to include synonym expansion
+            
+        Yields:
+            dict: Batches with {'batch': str, 'keywords': list, 'is_final': bool}
+        """
+        # Step 1: Extract keywords from the input text
+        extracted_keywords = self._extract_keywords_from_text(query, max_keywords=5)
+        logging.info(f"Extracted keywords: {extracted_keywords}")
+        
+        all_keywords = []
+        seen_uris = set()
+        
+        def add_unique(keywords_list):
+            """Helper to add unique keywords to all_keywords"""
+            unique = []
+            for kw in keywords_list:
+                uri = kw.get('uri', '')
+                if uri and uri not in seen_uris:
+                    seen_uris.add(uri)
+                    unique.append(kw)
+                    all_keywords.append(kw)
+                elif not uri:
+                    unique.append(kw)
+                    all_keywords.append(kw)
+            return unique
+        
+        # Phase 1: Search for exact matches WITHOUT synonyms
+        exact_matches = []
+        for keyword in extracted_keywords:
+            logging.info(f"Searching for exact matches: '{keyword}'")
+            
+            # Search each source without synonyms
+            termdat_results = self.search_termdat(keyword, query_lang, include_synonyms=False)
+            for result in termdat_results:
+                result['extracted_from'] = query if len(query.split()) > 3 else None
+                result['search_keyword'] = keyword
+            
+            gemet_results = self.search_gemet(keyword)
+            for result in gemet_results:
+                result['extracted_from'] = query if len(query.split()) > 3 else None
+                result['search_keyword'] = keyword
+            
+            wikidata_results = self.search_wikidata(keyword)
+            for result in wikidata_results:
+                result['extracted_from'] = query if len(query.split()) > 3 else None
+                result['search_keyword'] = keyword
+            
+            batch_results = termdat_results + gemet_results + wikidata_results
+            unique_batch = add_unique(batch_results)
+            exact_matches.extend(unique_batch)
+        
+        # Apply source limits and sorting to exact matches
+        sorted_exact = self._apply_source_limits_and_sort(exact_matches, query)
+        
+        # Yield first batch: exact matches
+        if sorted_exact:
+            yield {
+                'batch': 'exact_matches',
+                'keywords': sorted_exact,
+                'is_final': not include_synonyms
+            }
+        
+        # Phase 2: Search with synonyms (if enabled)
+        if include_synonyms:
+            synonym_matches = []
+            for keyword in extracted_keywords:
+                logging.info(f"Searching with synonyms: '{keyword}'")
+                
+                # Search with synonyms enabled
+                termdat_results = self.search_termdat(keyword, query_lang, include_synonyms=True)
+                for result in termdat_results:
+                    result['extracted_from'] = query if len(query.split()) > 3 else None
+                    result['search_keyword'] = keyword
+                
+                batch_results = termdat_results
+                unique_batch = add_unique(batch_results)
+                synonym_matches.extend(unique_batch)
+            
+            # Apply source limits and sorting to all keywords
+            sorted_all = self._apply_source_limits_and_sort(all_keywords, query)
+            
+            # Yield second batch: all results including synonyms
+            yield {
+                'batch': 'with_synonyms',
+                'keywords': sorted_all,
+                'is_final': True
+            }
+        
+    def _apply_source_limits_and_sort(self, keywords, query):
+        """Apply source limits and sorting to a list of keywords."""
+        # Remove duplicates (same URI)
+        seen_uris = set()
+        unique_keywords = []
+        for kw in keywords:
+            uri = kw.get('uri', '')
+            if uri and uri not in seen_uris:
+                seen_uris.add(uri)
+                unique_keywords.append(kw)
+            elif not uri:
+                unique_keywords.append(kw)
+        
+        # Group keywords by source and limit per source
+        source_limits = {
+            'TERMDAT': 5,
+            'GEMET': 5,
+            'Wikidata': 5
+        }
+        
+        # Sort function for within-source ranking
+        def sort_key(result):
+            multilingual_terms = result.get('multilingual_label', {})
+            search_keyword = result.get('search_keyword', query).lower()
+            has_exact_match = any(
+                term.lower() == search_keyword
+                for term in multilingual_terms.values()
+            )
+            is_synonym_result = result.get('is_synonym_result', False)
+            return (
+                0 if has_exact_match else 1,
+                1 if is_synonym_result else 0,
+                -len(result.get('available_languages', []))
+            )
+        
+        # Group by source
+        keywords_by_source = {}
+        for kw in unique_keywords:
+            source = kw.get('source', 'Unknown')
+            if source not in keywords_by_source:
+                keywords_by_source[source] = []
+            keywords_by_source[source].append(kw)
+        
+        # Sort within each source and limit
+        limited_keywords = []
+        for source in ['TERMDAT', 'GEMET', 'Wikidata']:
+            if source in keywords_by_source:
+                source_keywords = keywords_by_source[source]
+                source_keywords.sort(key=sort_key)
+                limit = source_limits.get(source, 5)
+                limited_keywords.extend(source_keywords[:limit])
+        
+        # Final global sort: EXACT MATCHES FIRST (regardless of source), then by source priority
+        def final_sort_key(result):
+            multilingual_terms = result.get('multilingual_label', {})
+            search_keyword = result.get('search_keyword', query).lower()
+            has_exact_match = any(
+                term.lower() == search_keyword
+                for term in multilingual_terms.values()
+            )
+            is_synonym_result = result.get('is_synonym_result', False)
+            
+            # Count official languages (DE, FR, IT, EN)
+            official_langs = {'de', 'fr', 'it', 'en'}
+            lang_count = len([lang for lang in multilingual_terms.keys() if lang.lower() in official_langs])
+            has_rich_languages = lang_count > 2  # More than 2 official languages
+            
+            source_priority = {'TERMDAT': 0, 'GEMET': 1, 'Wikidata': 2}
+            source = result.get('source', 'Unknown')
+            source_rank = source_priority.get(source, 999)
+            
+            # Priority: exact match > rich languages > source > synonym > language count
+            return (
+                0 if has_exact_match else 1,      # Exact matches first
+                0 if has_rich_languages else 1,    # Rich multilingual (>2 langs) before sparse
+                source_rank,                       # Then by source priority
+                1 if is_synonym_result else 0,    # Direct matches before synonyms
+                -lang_count                        # More languages better
+            )
+        
+        limited_keywords.sort(key=final_sort_key)
+        
+        # Ensure at least two sources are represented
+        sources_present = set(kw.get('source') for kw in limited_keywords[:15])
+        if len(sources_present) < 2:
+            diverse_keywords = []
+            for source in ['TERMDAT', 'GEMET', 'Wikidata']:
+                if source in keywords_by_source:
+                    source_keywords = keywords_by_source[source]
+                    source_keywords.sort(key=sort_key)
+                    diverse_keywords.extend(source_keywords)
+            diverse_keywords.sort(key=final_sort_key)
+            return diverse_keywords[:15]
+        
+        return limited_keywords[:15]
+    
     def generate_keywords(self, query, query_lang='de', include_synonyms=True):
         """Generate keywords following DCAT-AP CH priority cascade with exact match prioritization and synonym support.
         Supports both single keyword queries and multi-sentence descriptions.
@@ -1235,13 +1851,20 @@ Keywords:"""
         Returns:
             list: List of keyword dictionaries with metadata
         """
+        # For backwards compatibility, collect all batches and return final result
+        final_keywords = []
+        for batch in self.generate_keywords_streaming(query, query_lang, include_synonyms):
+            if batch['is_final']:
+                final_keywords = batch['keywords']
+        return final_keywords
+    
+    def generate_keywords_old(self, query, query_lang='de', include_synonyms=True):
+        """Old implementation - kept for reference."""
         all_keywords = []
         
-        logging.info(f"Starting keyword generation for: '{query[:100]}...' in language: {query_lang}")
+        logging.info(f"Starting keyword generation (old) for: '{query[:100]}...' in language: {query_lang}")
         
         # Step 1: Extract keywords from the input text
-        # If it's a short query (1-3 words), treat as single keyword
-        # If it's longer, extract multiple keywords
         extracted_keywords = self._extract_keywords_from_text(query, max_keywords=5)
         logging.info(f"Extracted keywords: {extracted_keywords}")
         
@@ -1275,54 +1898,8 @@ Keywords:"""
                 result['search_keyword'] = keyword
             all_keywords.extend(wikidata_results)
         
-        # Remove duplicates (same URI)
-        seen_uris = set()
-        unique_keywords = []
-        for kw in all_keywords:
-            uri = kw.get('uri', '')
-            if uri and uri not in seen_uris:
-                seen_uris.add(uri)
-                unique_keywords.append(kw)
-            elif not uri:  # Keep keywords without URIs (literals)
-                unique_keywords.append(kw)
-        
-        # Sort all results: exact matches first, then by synonym priority, then by source priority
-        def sort_key(result):
-            # Check against all extracted keywords for exact match
-            multilingual_terms = result.get('multilingual_label', {})
-            search_keyword = result.get('search_keyword', query).lower()
-            
-            # Check for exact match in any language
-            has_exact_match = any(
-                term.lower() == search_keyword
-                for term in multilingual_terms.values()
-            )
-            
-            # Check if this was found via synonym search
-            is_synonym_result = result.get('is_synonym_result', False)
-            
-            # Source priority mapping
-            source_priority = {
-                'TERMDAT': 0,
-                'GEMET': 1, 
-                'Wikidata': 2
-            }
-            
-            source = result.get('source', 'Unknown')
-            source_rank = source_priority.get(source, 999)
-            
-            # Return tuple: (exact_match_priority, synonym_priority, source_priority, negative_language_count)
-            return (
-                0 if has_exact_match else 1,
-                1 if is_synonym_result else 0,
-                source_rank,
-                -len(result.get('available_languages', []))
-            )
-        
-        unique_keywords.sort(key=sort_key)
-        
-        # Limit final results to 15 (increased from 10 to accommodate multiple extracted keywords)
-        return unique_keywords[:15]
+        # Use the shared helper method for sorting and limiting
+        return self._apply_source_limits_and_sort(all_keywords, query)
     
     def generate_keywords_progressive(self, i14y_item, query_lang='de'):
         """Generate keywords using improved progressive algorithm for workflow 1.
@@ -1607,6 +2184,51 @@ def refine_step4():
     """Step 4: Update keywords on I14Y"""
     return render_template('refine_step4.html')
 
+@app.route('/search-stream', methods=['POST'])
+def search_keywords_stream():
+    """Streaming endpoint that returns results progressively"""
+    query = request.json.get('query', '').strip()
+    query_lang = request.json.get('lang', 'de').strip().lower()
+    include_synonyms = request.json.get('include_synonyms', True)
+    
+    if not query:
+        return jsonify({'error': 'Query is required'}), 400
+    
+    def generate():
+        """Generator function for Server-Sent Events"""
+        try:
+            for batch_data in keyword_generator.generate_keywords_streaming(query, query_lang, include_synonyms):
+                # Sanitize keywords for JSON
+                sanitized = []
+                for kw in batch_data['keywords']:
+                    sanitized.append({
+                        'source': kw.get('source', ''),
+                        'multilingual_label': kw.get('multilingual_label', {}),
+                        'uri': kw.get('uri', ''),
+                        'description': kw.get('description', ''),
+                        'entry_id': kw.get('entry_id', ''),
+                        'query_lang': kw.get('query_lang', query_lang),
+                        'available_languages': kw.get('available_languages', []),
+                        'is_synonym_result': kw.get('is_synonym_result', False),
+                        'found_via_query': kw.get('found_via_query', query),
+                        'extracted_from': kw.get('extracted_from'),
+                        'search_keyword': kw.get('search_keyword')
+                    })
+                
+                # Send as Server-Sent Event
+                result = {
+                    'batch': batch_data['batch'],
+                    'keywords': sanitized,
+                    'total': len(sanitized),
+                    'is_final': batch_data['is_final']
+                }
+                yield f"data: {json.dumps(result)}\n\n"
+        except Exception as e:
+            logging.error(f"Streaming error: {e}", exc_info=True)
+            yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
 @app.route('/search', methods=['POST'])
 def search_keywords():
     query = request.json.get('query', '').strip()
@@ -1614,6 +2236,7 @@ def search_keywords():
     include_synonyms = request.json.get('include_synonyms', True)  # Default to True
     direct_search = request.json.get('direct_search', False)  # Direct search without NLP extraction
     source_filter = request.json.get('source', 'all').lower()  # termdat, gemet, wikidata, or all
+    use_streaming = request.json.get('use_streaming', False)  # Enable streaming mode
     
     if not query:
         return jsonify({'error': 'Query is required'}), 400

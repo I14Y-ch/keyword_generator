@@ -308,7 +308,7 @@
                 
                 return `
                     <div class="keyword-card">
-                        <div class="keyword-source" style="background: ${sourceColor};">${escapeHtml(sourceTag || 'LOCAL')}</div>
+                        <div class="keyword-source ${sourceTag ? 'source-' + sourceTag.toLowerCase() : 'source-existing'}">${escapeHtml(sourceTag || 'LOCAL')}</div>
                         <div class="keyword-title">${escapeHtml(label)}</div>
                         ${languageIndicators}
                         ${uri ? `<div class="keyword-uri" style="margin-top: 4px;"><a href="${escapeHtml(uri)}" target="_blank" rel="noopener noreferrer">${escapeHtml(uri)}</a></div>` : ''}
