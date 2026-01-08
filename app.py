@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, Response, stream_with_context
 from flask_caching import Cache
-from flask_cors import CORS
 import requests
 import json
 import logging
@@ -27,18 +26,12 @@ app = Flask(__name__)
 
 # Configure session and security
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
-# Configure CORS for API endpoints
-CORS(app, resources={
-    r"/search": {"origins": "*"},
-    r"/search-stream": {"origins": "*"},
-    r"/generate-progressive-keywords": {"origins": "*"},
-    r"/upload-keywords": {"origins": "*"},
-    r"/api/*": {"origins": "*"}
-}, supports_credentials=True)
+# Don't set secure cookies in development
+if os.environ.get('FLASK_ENV') == 'production':
+    app.config['SESSION_COOKIE_SECURE'] = True
 
 # Configure caching
 app.config['CACHE_TYPE'] = 'SimpleCache'
