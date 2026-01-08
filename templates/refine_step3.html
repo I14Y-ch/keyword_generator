@@ -365,7 +365,10 @@
             container.innerHTML = combinedKeywords.map((kw, index) => {
                 const label = extractProposedLabel(kw);
                 const uri = kw.uri || '';
-                const source = kw.source || detectSourceFromUri(uri) || 'LOCAL';
+                const rawSource = typeof kw.source === 'string' ? kw.source.trim() : kw.source || '';
+                const detectedSource = detectSourceFromUri(uri);
+                const source = (rawSource && rawSource.trim()) || detectedSource || 'LOCAL';
+                const sourceLabel = (source && typeof source === 'string' && source.trim()) ? source.trim().toUpperCase() : 'LOCAL';
                 const thematicArea = extractThematicArea(kw);
                 const isExisting = kw.isExisting;
                 
@@ -400,7 +403,7 @@
                     <div class="${cardClass}" draggable="true" data-index="${index}">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                             <div style="flex: 1;">
-                                <div class="keyword-source source-${source.toLowerCase()}">${escapeHtml(source.toUpperCase())}</div>
+                                <div class="keyword-source source-${sourceLabel.toLowerCase()}">${escapeHtml(sourceLabel)}</div>
                                 <div class="keyword-title">${escapeHtml(label)}</div>
                                 ${languageIndicators}
                                 ${thematicArea ? `<div class="keyword-meta">${escapeHtml(thematicArea)}</div>` : ''}

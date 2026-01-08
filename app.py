@@ -3500,7 +3500,12 @@ def update_i14y_keywords():
                 # Fallback: no label found
                 logging.warning(f"Keyword has no label: {kw}")
                 continue
-                
+            
+            # Skip keywords without a URI to satisfy I14Y validator
+            if not keyword_obj.get('uri'):
+                logging.info(f"Skipping keyword without URI: {keyword_obj}")
+                continue
+
             formatted_keywords.append(keyword_obj)
         
         if not formatted_keywords:
@@ -3570,9 +3575,9 @@ def update_i14y_keywords():
             'Accept': 'application/json'
         }
         
-        logging.info(f"Updating {object_type} {object_id} on I14Y with {len(formatted_keywords)} keywords")
-        logging.info(f"PUT URL: {partner_api_url}")
-        logging.info(f"Full PUT payload:\n{json.dumps(update_payload, indent=2, ensure_ascii=False)}")
+        print(f"Updating {object_type} {object_id} on I14Y with {len(formatted_keywords)} keywords")
+        print(f"PUT URL: {partner_api_url}")
+        print(f"Full PUT payload:\n{json.dumps(update_payload, indent=2, ensure_ascii=False)}")
         
         response = http_session.put(
             partner_api_url,
@@ -3591,6 +3596,9 @@ def update_i14y_keywords():
                 'object_id': object_id,
                 'object_type': object_type
             })
+        elif response.status_code >= 400: 
+            print(response.text)
+            
         elif response.status_code == 401:
             return jsonify({'error': 'Unauthorized - Invalid API token'}), 401
         elif response.status_code == 403:
