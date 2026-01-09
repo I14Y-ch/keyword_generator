@@ -38,16 +38,12 @@
                     <div class="step-circle">1</div>
                     <div class="step-label">Search I14Y</div>
                 </div>
-                <div class="step" id="step2">
-                    <div class="step-circle">2</div>
-                    <div class="step-label">Review Current</div>
-                </div>
                 <div class="step" id="step3">
-                    <div class="step-circle">3</div>
-                    <div class="step-label">Generate New</div>
+                    <div class="step-circle">2</div>
+                    <div class="step-label">Generate & Review</div>
                 </div>
                 <div class="step" id="step4">
-                    <div class="step-circle">4</div>
+                    <div class="step-circle">3</div>
                     <div class="step-label">Update I14Y</div>
                 </div>
             </div>
@@ -68,7 +64,7 @@
                 <div id="searchStatus" style="margin-top: 10px; color: #666; font-size: 0.9em;"></div>
             </div>
             
-            <!-- Step 2: Review Current Keywords -->
+            <!-- Step 2: Review Current Keywords (HIDDEN) -->
             <div class="workflow-section" id="section-current" style="display: none;">
                 <h2 class="section-title">📋 Step 2: Current Item Details</h2>
                 
@@ -78,18 +74,24 @@
                     <h4>Current Keywords:</h4>
                     <div id="currentKeywordsList"></div>
                 </div>
+            </div>
+            
+            <!-- Step 3: Generate & Review Proposed Keywords -->
+            <div class="workflow-section" id="section-proposed" style="display: none;">
+                <h2 class="section-title">✨ Step 2: Generate & Review Keywords</h2>
+                <p class="section-description">Generate improved keywords for this item and compare with current ones:</p>
                 
-                <div style="margin-top: 20px;">
+                <div id="selectedItemSummary" style="background: #f8fafc; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: none;">
+                    <h4 style="margin: 0 0 10px 0;">Selected Item:</h4>
+                    <div id="selectedItemTitle" style="font-weight: 600;"></div>
+                    <div id="selectedItemDesc" style="color: #666; font-size: 0.9em; margin-top: 5px;"></div>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
                     <button id="generateNewBtn" class="search-btn" style="padding: 12px 30px;">
                         Generate Improved Keywords
                     </button>
                 </div>
-            </div>
-            
-            <!-- Step 3: Review Proposed Keywords -->
-            <div class="workflow-section" id="section-proposed" style="display: none;">
-                <h2 class="section-title">✨ Step 3: Proposed Keywords</h2>
-                <p class="section-description">Review the generated keywords and compare with current ones:</p>
                 
                 <div class="keyword-comparison">
                     <div class="keyword-column current">
@@ -113,9 +115,9 @@
                 </div>
             </div>
             
-            <!-- Step 4: Update I14Y -->
+            <!-- Step 3: Update I14Y -->
             <div class="workflow-section" id="section-update" style="display: none;">
-                <h2 class="section-title">🚀 Step 4: Update Keywords on I14Y</h2>
+                <h2 class="section-title">🚀 Step 3: Update Keywords on I14Y</h2>
                 <p class="section-description">Provide your I14Y Partner API token to update the keywords:</p>
                 
                 <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
@@ -266,8 +268,9 @@
             selectedDataset = cachedSearchResults[index];
             
             hideLoading();
-            showCurrentStep(2);
-            displaySelectedDataset();
+            // Skip step 2 - go directly to step 3
+            showCurrentStep(3);
+            displaySelectedDatasetInProposedStep();
         }
         
         function displaySelectedDataset() {
@@ -313,6 +316,39 @@
                 .map(kw => `<span class="keyword-tag">${escapeHtml(kw)}</span>`)
                 .join('');
             document.getElementById('currentKeywordsSection').style.display = 'block';
+        }
+        
+        function displaySelectedDatasetInProposedStep() {
+            // Display selected item summary in the proposed keywords section
+            const titleDiv = document.getElementById('selectedItemTitle');
+            const descDiv = document.getElementById('selectedItemDesc');
+            const summaryDiv = document.getElementById('selectedItemSummary');
+            
+            titleDiv.textContent = selectedDataset.title;
+            descDiv.textContent = selectedDataset.description || '(No description available)';
+            summaryDiv.style.display = 'block';
+            
+            // Extract and store current keywords from fullObject if available
+            const keywords = selectedDataset.fullObject?.keywords || [];
+            if (keywords && keywords.length > 0) {
+                selectedDataset.currentKeywords = keywords.map(kw => {
+                    // Handle multilingual labels
+                    if (kw.label) {
+                        if (typeof kw.label === 'object') {
+                            return kw.label.de || kw.label.fr || kw.label.en || kw.label.it || '';
+                        }
+                        return kw.label;
+                    }
+                    // Fallback to string if kw is just a string
+                    return typeof kw === 'string' ? kw : '';
+                }).filter(k => k);
+            } else {
+                selectedDataset.currentKeywords = [];
+            }
+            
+            // Show the proposed keywords section
+            document.getElementById('section-proposed').style.display = 'block';
+            document.getElementById('section-proposed').scrollIntoView({ behavior: 'smooth' });
         }
         
         // Generate new keywords

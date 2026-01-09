@@ -40,16 +40,9 @@
                 </li>
                 <li class="step-arrow">→</li>
                 <li class="step-item">
-                    <a href="/refine/step2" class="step-link completed">
-                        <span class="step-number">2</span>
-                        <span>Review Item</span>
-                    </a>
-                </li>
-                <li class="step-arrow">→</li>
-                <li class="step-item">
                     <span class="step-link active">
-                        <span class="step-number">3</span>
-                        <span>Arrange & Update</span>
+                        <span class="step-number">2</span>
+                        <span>Select Keywords</span>
                     </span>
                 </li>
             </ul>
@@ -126,6 +119,8 @@
         let existingKeywords = [];
         let combinedKeywords = []; // Combined array for display and reordering
         const LANG_KEYS = ['de', 'fr', 'it', 'en', 'rm'];
+        let streamingProposedMap = new Map();
+        let existingIdentitySet = new Set();
         
         window.addEventListener('DOMContentLoaded', function() {
             const storedItem = sessionStorage.getItem('selectedI14YItem');
@@ -138,6 +133,7 @@
             
             selectedItem = JSON.parse(storedItem);
             existingKeywords = extractExistingKeywords();
+            existingIdentitySet = new Set(existingKeywords.map(buildKeywordIdentity).filter(Boolean));
             combinedKeywords = [...existingKeywords]; // Start with existing keywords
             displayCombinedKeywords();
             updateKeywordCount();
@@ -159,37 +155,106 @@
         });
         
         async function startProgressiveGeneration(query) {
-            document.getElementById('loadingStatus').style.display = 'block';
-            document.getElementById('statusText').textContent = 'Initializing keyword generation...';
+            const loadingEl = document.getElementById('loadingStatus');
+            const statusEl = document.getElementById('statusText');
+            const errorEl = document.getElementById('error');
+            if (errorEl) {
+                errorEl.style.display = 'none';
+                errorEl.textContent = '';
+            }
+            if (loadingEl) loadingEl.style.display = 'block';
+            if (statusEl) statusEl.textContent = 'Initializing keyword generation...';
             generatedKeywords = [];
-            
+            streamingProposedMap = new Map();
+
+            const payload = {
+                i14y_item: selectedItem.fullObject || selectedItem,
+                lang: 'de',
+                include_synonyms: true
+            };
+
+            const upsertProposed = (keywords = []) => {
+                keywords.forEach((kw) => {
+                    const identity = buildKeywordIdentity(kw);
+                    if (!identity) return;
+                    if (existingIdentitySet.has(identity)) return; // skip already-present keywords
+                    if (streamingProposedMap.has(identity)) {
+                        streamingProposedMap.set(identity, { ...streamingProposedMap.get(identity), ...kw });
+                        return;
+                    }
+                    streamingProposedMap.set(identity, { ...kw, isExisting: false });
+                });
+                return Array.from(streamingProposedMap.values()).slice(0, 15);
+            };
+
             try {
-                // Use the new progressive generation endpoint
-                const response = await fetch('/generate-progressive-keywords', {
+                const response = await fetch('/generate-progressive-keywords-stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        i14y_item: selectedItem.fullObject || selectedItem,
-                        lang: 'de'
-                    })
+                    body: JSON.stringify(payload)
                 });
-                
-                const data = await response.json();
-                
-                if (response.ok && data.keywords) {
-                    prepareNewKeywords(data.keywords);
-                    displayCombinedKeywords();
-                } else {
-                    throw new Error(data.error || 'Failed to generate keywords');
+
+                if (!response.ok || !response.body) {
+                    throw new Error(`Server error (${response.status})`);
                 }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                const processChunk = () => reader.read().then(({ done, value }) => {
+                    if (done) {
+                        sessionStorage.removeItem('keywordQuery');
+                        if (loadingEl) loadingEl.style.display = 'none';
+                        return;
+                    }
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        try {
+                            const data = JSON.parse(line.substring(6));
+                            if (data.error) throw new Error(data.error);
+
+                            if (data.type === 'status') {
+                                if (statusEl) statusEl.textContent = data.message || 'Working...';
+                                continue;
+                            }
+                            if (data.type !== 'keywords') continue;
+
+                            const aggregated = upsertProposed(data.keywords || []);
+                            generatedKeywords = aggregated;
+                            combinedKeywords = [...existingKeywords, ...generatedKeywords];
+                            displayCombinedKeywords();
+                            updateKeywordCount();
+
+                            if (data.is_final && statusEl) {
+                                statusEl.textContent = 'Keyword discovery complete';
+                            }
+                        } catch (err) {
+                            if (errorEl) {
+                                errorEl.textContent = 'Error generating keywords: ' + err.message;
+                                errorEl.style.display = 'block';
+                            }
+                        }
+                    }
+
+                    return processChunk();
+                }).catch(err => { throw err; });
+
+                await processChunk();
             } catch (error) {
-                document.getElementById('error').textContent = 'Error generating keywords: ' + error.message;
-                document.getElementById('error').style.display = 'block';
+                if (errorEl) {
+                    errorEl.textContent = 'Error generating keywords: ' + error.message;
+                    errorEl.style.display = 'block';
+                }
                 console.error('Progressive generation error:', error);
                 displayCombinedKeywords();
             } finally {
-                document.getElementById('loadingStatus').style.display = 'none';
-                sessionStorage.removeItem('keywordQuery');
+                setTimeout(() => { if (loadingEl) loadingEl.style.display = 'none'; }, 400);
             }
         }
         
@@ -236,12 +301,31 @@
             persistKeywords();
         }
         
-        function removeKeyword(index) {
-            combinedKeywords.splice(index, 1);
-            displayCombinedKeywords();
+        function toggleKeywordSelection(cardId, index) {
+            if (index < 0 || index >= combinedKeywords.length) {
+                console.warn(`Invalid keyword index: ${index}`);
+                return;
+            }
+            
+            const keyword = combinedKeywords[index];
+            keyword.isSelected = !keyword.isSelected;
+            
+            const card = document.getElementById(cardId);
+            if (card) {
+                if (keyword.isSelected) {
+                    card.classList.add('selected');
+                } else {
+                    card.classList.remove('selected');
+                }
+            }
+            
+            updateKeywordCount();
+            persistKeywords();
         }
         
+        // Legacy function - kept for backward compatibility (no-op)
         function attachCombinedDragHandlers() {
+            // Drag handlers removed - using card selection instead
             const items = document.querySelectorAll('.keyword-card[draggable="true"]');
             let draggedIndex = null;
             items.forEach(item => {
@@ -334,21 +418,23 @@
         }
 
         function updateKeywordCount() {
+            const selected = combinedKeywords.filter(kw => kw.isSelected).length;
             const total = combinedKeywords.length;
-            const existingCount = combinedKeywords.filter(kw => kw.isExisting).length;
-            const newCount = combinedKeywords.filter(kw => !kw.isExisting).length;
             const countEl = document.getElementById('keywordCount');
             if (!countEl) return;
-            countEl.textContent = `${total} keywords total (existing: ${existingCount}, new: ${newCount})`;
+            countEl.textContent = `${selected}/${total} keywords selected`;
+        }
+
+        function getSelectedKeywords() {
+            return combinedKeywords.filter(kw => kw.isSelected);
         }
 
         function getCombinedKeywords() {
-            return combinedKeywords;
+            return getSelectedKeywords();
         }
 
         function persistKeywords() {
-            sessionStorage.setItem('generatedKeywords', JSON.stringify(combinedKeywords.filter(kw => !kw.isExisting)));
-            sessionStorage.setItem('finalKeywords', JSON.stringify(getCombinedKeywords()));
+            sessionStorage.setItem('finalKeywords', JSON.stringify(getSelectedKeywords()));
         }
 
         function displayCombinedKeywords() {
@@ -370,6 +456,7 @@
                 const source = (rawSource && rawSource.trim()) || detectedSource || 'LOCAL';
                 const sourceLabel = (source && typeof source === 'string' && source.trim()) ? source.trim().toUpperCase() : 'LOCAL';
                 const thematicArea = extractThematicArea(kw);
+                const isSelected = kw.isSelected || false;
                 const isExisting = kw.isExisting;
                 
                 // Get available languages for this keyword
@@ -389,34 +476,23 @@
                         `<span class="lang-tag" title="${lang.toUpperCase()}: ${escapeHtml(kw.multilingual_label[lang])}">${lang.toUpperCase()}</span>`
                     ).join('')}</div>`;
                 }
-                
-                const sourceColor = source.toLowerCase() === 'termdat' ? '#059669' :
-                                   source.toLowerCase() === 'gemet' ? '#7c3aed' :
-                                   source.toLowerCase() === 'wikidata' ? '#2563eb' :
-                                   '#64748b';
 
-                const cardClass = isExisting ? 'keyword-card existing-keyword-card' : 'keyword-card new-keyword-card';
+                const cardClass = `keyword-card ${isSelected ? 'selected' : ''} ${isExisting ? 'existing-keyword-card' : 'new-keyword-card'}`;
                 const statusText = isExisting ? 'From I14Y' : 'New keyword';
                 const statusColor = isExisting ? '#0f766e' : '#2563eb';
 
                 return `
-                    <div class="${cardClass}" draggable="true" data-index="${index}">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                            <div style="flex: 1;">
-                                <div class="keyword-source source-${sourceLabel.toLowerCase()}">${escapeHtml(sourceLabel)}</div>
-                                <div class="keyword-title">${escapeHtml(label)}</div>
-                                ${languageIndicators}
-                                ${thematicArea ? `<div class="keyword-meta">${escapeHtml(thematicArea)}</div>` : ''}
-                                ${uri ? `<div class="keyword-uri"><a href="${escapeHtml(uri)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">${escapeHtml(uri)}</a></div>` : ''}
-                                <div style="margin-top: 6px; font-size: 0.8em; color: ${statusColor}; font-weight: 600;">${statusText}</div>
-                            </div>
-                            <button class="icon-btn" title="Remove" onclick="removeKeyword(${index}); event.stopPropagation();">✕</button>
-                        </div>
+                    <div class="${cardClass}" id="keyword-${index}" onclick="window.toggleKeywordSelection('keyword-${index}', ${index})" style="cursor: pointer;">
+                        <div class="keyword-source source-${sourceLabel.toLowerCase()}">${escapeHtml(sourceLabel)}</div>
+                        <div class="keyword-title">${escapeHtml(label)}</div>
+                        ${languageIndicators}
+                        ${thematicArea ? `<div class="keyword-meta">${escapeHtml(thematicArea)}</div>` : ''}
+                        ${uri ? `<div class="keyword-uri"><a href="${escapeHtml(uri)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">${escapeHtml(uri)}</a></div>` : ''}
+                        <div style="margin-top: 6px; font-size: 0.8em; color: ${statusColor}; font-weight: 600;">${statusText}</div>
                     </div>
                 `;
             }).join('');
             
-            attachCombinedDragHandlers();
             updateKeywordCount();
             persistKeywords();
         }

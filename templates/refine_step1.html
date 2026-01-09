@@ -42,13 +42,6 @@
                 <li class="step-item">
                     <span class="step-link disabled">
                         <span class="step-number">2</span>
-                        <span>Review Item</span>
-                    </span>
-                </li>
-                <li class="step-arrow">→</li>
-                <li class="step-item">
-                    <span class="step-link disabled">
-                        <span class="step-number">3</span>
                         <span>Arrange & Update</span>
                     </span>
                 </li>
@@ -337,9 +330,12 @@
         
         function selectItem(index) {
             const item = cachedSearchResults[index];
-            // Store in sessionStorage and navigate to step 2
+            // Store in sessionStorage and navigate to step 3 (skipping step 2)
             sessionStorage.setItem('selectedI14YItem', JSON.stringify(item));
-            window.location.href = '/refine/step2';
+            // Start generating keywords immediately for selected item
+            const description = item.description || item.title || '';
+            sessionStorage.setItem('keywordQuery', description);
+            window.location.href = '/refine/step3';
         }
         
         function displaySearchResults(results) {

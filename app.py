@@ -78,6 +78,19 @@ class KeywordGenerator:
         adapter = HTTPAdapter(max_retries=retries)
         self.session.mount('https://', adapter)
         self.session.mount('http://', adapter)
+
+        # Optional spaCy model for embeddings/NLP; fall back to None if unavailable
+        self.nlp = None
+        try:
+            import spacy
+            try:
+                self.nlp = spacy.load('de_core_news_sm')
+            except Exception:
+                # If the German model is missing, try a blank pipeline as a lightweight fallback
+                self.nlp = spacy.blank('de')
+        except Exception:
+            # Keep self.nlp as None so downstream code uses regex/LLM fallbacks
+            self.nlp = None
         
         # OpenAI API key for keyword extraction (required for AI-based generation)
         self.openai_api_key = os.environ.get('OPENAI_API_KEY')
@@ -2224,21 +2237,26 @@ JSON array:"""
         logging.info(f"Workflow 2 generated {len(sorted_results)} total keywords")
         return sorted_results
 
-    def generate_keywords_streaming(self, query, query_lang='de', include_synonyms=True):
+    def generate_keywords_streaming(self, query, query_lang='de', include_synonyms=True, yield_status=False):
         """Generate keywords with streaming support - yields results as they become available.
-        
+
         Yields batches of keywords in this order:
         1. Exact matches from all sources (without synonyms)
-        2. Synonym-based results
-        
+        2. Synonym-based results (if enabled)
+
         Args:
             query: Single keyword or longer description text
             query_lang: Language code (de, fr, it, en)
             include_synonyms: Whether to include synonym expansion
-            
+            yield_status: Emit status events for UI updates when True
+
         Yields:
-            dict: Batches with {'batch': str, 'keywords': list, 'is_final': bool}
+            dict: Items with either status updates or keyword batches:
+                  {'type': 'status', 'message': str, 'stage': str}
+                  {'type': 'keywords', 'batch': str, 'keywords': list, 'is_final': bool, 'total': int}
         """
+        if yield_status:
+            yield {'type': 'status', 'stage': 'init', 'message': 'Preparing search terms...'}
         # Step 1: Build candidate keywords in a deterministic order
         # 1) Raw query
         # 2) Compound parts (if single word and splittable)
@@ -2287,6 +2305,12 @@ JSON array:"""
                     self.openai_api_key = saved_key
 
         logging.info(f"Candidate keywords for search: {candidates}")
+        if yield_status:
+            yield {
+                'type': 'status',
+                'stage': 'candidates',
+                'message': f"Built {len(candidates)} search term(s)"
+            }
         
         all_keywords = []
         seen_uris = set()
@@ -2307,7 +2331,14 @@ JSON array:"""
         
         # Phase 1: Search for exact matches WITHOUT synonyms
         exact_matches = []
-        for keyword in candidates:
+        for idx, keyword in enumerate(candidates):
+            if yield_status:
+                yield {
+                    'type': 'status',
+                    'stage': 'exact',
+                    'message': f"[{idx + 1}/{len(candidates)}] Searching TERMDAT/GEMET/Wikidata for \"{keyword}\""
+                }
+
             logging.info(f"Searching for exact matches: '{keyword}'")
             
             # Search each source without synonyms
@@ -2329,22 +2360,35 @@ JSON array:"""
             batch_results = termdat_results + gemet_results + wikidata_results
             unique_batch = add_unique(batch_results)
             exact_matches.extend(unique_batch)
+
+            if unique_batch:
+                snapshot = self._apply_source_limits_and_sort(all_keywords, query)
+                yield {
+                    'type': 'keywords',
+                    'batch': 'exact_matches',
+                    'keywords': snapshot,
+                    'is_final': False,
+                    'total': len(all_keywords)
+                }
         
-        # Apply source limits and sorting to exact matches
-        sorted_exact = self._apply_source_limits_and_sort(exact_matches, query)
-        
-        # Yield first batch: exact matches
-        if sorted_exact:
+        if yield_status:
             yield {
-                'batch': 'exact_matches',
-                'keywords': sorted_exact,
-                'is_final': not include_synonyms
+                'type': 'status',
+                'stage': 'exact',
+                'message': 'Exact matches processed'
             }
-        
+
         # Phase 2: Search with synonyms (if enabled)
         if include_synonyms:
             synonym_matches = []
-            for keyword in candidates:
+            for idx, keyword in enumerate(candidates):
+                if yield_status:
+                    yield {
+                        'type': 'status',
+                        'stage': 'synonyms',
+                        'message': f"[{idx + 1}/{len(candidates)}] Expanding synonyms for \"{keyword}\" via TERMDAT"
+                    }
+
                 logging.info(f"Searching with synonyms: '{keyword}'")
                 
                 # Search with synonyms enabled
@@ -2356,16 +2400,35 @@ JSON array:"""
                 batch_results = termdat_results
                 unique_batch = add_unique(batch_results)
                 synonym_matches.extend(unique_batch)
-            
-            # Apply source limits and sorting to all keywords
-            sorted_all = self._apply_source_limits_and_sort(all_keywords, query)
-            
-            # Yield second batch: all results including synonyms
-            yield {
-                'batch': 'with_synonyms',
-                'keywords': sorted_all,
-                'is_final': True
-            }
+
+                if unique_batch:
+                    snapshot = self._apply_source_limits_and_sort(all_keywords, query)
+                    yield {
+                        'type': 'keywords',
+                        'batch': 'with_synonyms',
+                        'keywords': snapshot,
+                        'is_final': False,
+                        'total': len(all_keywords)
+                    }
+
+            if yield_status:
+                yield {
+                    'type': 'status',
+                    'stage': 'synonyms',
+                    'message': 'Synonym expansion complete'
+                }
+
+        final_snapshot = self._apply_source_limits_and_sort(all_keywords, query)
+        yield {
+            'type': 'keywords',
+            'batch': 'complete',
+            'keywords': final_snapshot,
+            'is_final': True,
+            'total': len(final_snapshot)
+        }
+
+        if yield_status:
+            yield {'type': 'status', 'stage': 'complete', 'message': 'Keyword discovery finished'}
         
     def _apply_source_limits_and_sort(self, keywords, query):
         """Apply source limits and sorting to a list of keywords."""
@@ -2478,8 +2541,10 @@ JSON array:"""
         # For backwards compatibility, collect all batches and return final result
         final_keywords = []
         for batch in self.generate_keywords_streaming(query, query_lang, include_synonyms):
-            if batch['is_final']:
-                final_keywords = batch['keywords']
+            if batch.get('type') == 'status':
+                continue
+            if batch.get('is_final'):
+                final_keywords = batch.get('keywords', [])
         return final_keywords
     
     def generate_keywords_progressive(self, i14y_item, query_lang='de'):
@@ -2498,16 +2563,32 @@ JSON array:"""
         Returns:
             list: List of keyword dictionaries with metadata
         """
+        # For backwards compatibility, consume the streaming generator and return the final batch
+        final_keywords = []
+        for event in self.generate_keywords_progressive_stream(i14y_item, query_lang=query_lang):
+            if event.get('type') == 'keywords' and event.get('is_final'):
+                final_keywords = event.get('keywords', [])
+        return final_keywords
+
+    def generate_keywords_progressive_stream(self, i14y_item, query_lang='de', include_synonyms=True, yield_status=True):
+        """Streaming generator for workflow 1 (I14Y integration).
+
+        Emits status updates and incremental keyword batches as soon as they are found.
+        """
         all_keywords = []
         seen_uris = set()
         seen_labels = set()
         existing_lang_keys = ['de', 'fr', 'it', 'en', 'rm']
-        
+
+        def emit_status(stage, message):
+            if yield_status:
+                yield {'type': 'status', 'stage': stage, 'message': message}
+
         def add_unique_keywords(new_keywords):
             """Add keywords to collection, avoiding duplicates"""
+            added = []
             for kw in new_keywords:
                 uri = kw.get('uri', '')
-                # Get a normalized label for deduplication
                 labels = kw.get('multilingual_label', {})
                 label_key = tuple(sorted(labels.values())) if labels else str(kw)
                 
@@ -2515,9 +2596,22 @@ JSON array:"""
                     seen_uris.add(uri)
                     seen_labels.add(label_key)
                     all_keywords.append(kw)
+                    added.append(kw)
                 elif not uri and label_key not in seen_labels:
                     seen_labels.add(label_key)
                     all_keywords.append(kw)
+                    added.append(kw)
+            return added
+
+        def emit_keywords(batch_label, is_final=False, query_text=''):
+            snapshot = self._apply_source_limits_and_sort(all_keywords, query_text or '')
+            return {
+                'type': 'keywords',
+                'batch': batch_label,
+                'keywords': snapshot,
+                'total': len(snapshot),
+                'is_final': is_final
+            }
         
         def count_unique_labels():
             """Count truly unique keywords (different labels)"""
@@ -2577,6 +2671,14 @@ JSON array:"""
             return candidates
         
         logging.info("=== Starting Progressive Keyword Generation ===")
+        if yield_status:
+            yield {'type': 'status', 'stage': 'init', 'message': 'Preparing I14Y metadata...'}
+
+        description_field = i14y_item.get('description', {})
+        if isinstance(description_field, dict):
+            description = description_field.get('de', '') or description_field.get('en', '') or description_field.get('fr', '')
+        else:
+            description = str(description_field) if description_field else ''
         
         # STAGE 1: Try exact matches for existing I14Y keywords
         existing_keywords = []
@@ -2592,6 +2694,8 @@ JSON array:"""
         
         if existing_keywords:
             logging.info(f"Stage 1: Searching for exact matches of {len(existing_keywords)} existing keywords")
+            if yield_status:
+                yield {'type': 'status', 'stage': 'existing', 'message': 'Checking existing I14Y keywords...'}
             searched_terms = set()
             for kw in existing_keywords:
                 if should_stop():
@@ -2612,21 +2716,31 @@ JSON array:"""
                     search_lang = lang_hint or query_lang
 
                     termdat_matches = self.search_termdat(label_value, search_lang, include_synonyms=False)
-                    add_unique_keywords(termdat_matches)
+                    added = add_unique_keywords(termdat_matches)
+                    if added:
+                        yield emit_keywords('existing_exact', is_final=False, query_text=description)
                     
                     if not should_stop():
                         gemet_matches = self.search_gemet(label_value)
-                        add_unique_keywords(gemet_matches)
+                        added = add_unique_keywords(gemet_matches)
+                        if added:
+                            yield emit_keywords('existing_exact', is_final=False, query_text=description)
                     
                     if not should_stop():
                         wikidata_matches = self.search_wikidata(label_value)
-                        add_unique_keywords(wikidata_matches)
+                        added = add_unique_keywords(wikidata_matches)
+                        if added:
+                            yield emit_keywords('existing_exact', is_final=False, query_text=description)
             
             logging.info(f"After Stage 1: {len(all_keywords)} keywords, {count_unique_labels()} unique")
+            if yield_status:
+                yield {'type': 'status', 'stage': 'existing', 'message': 'Existing keyword lookup finished'}
         
         # STAGE 2: If < 10 matches, use NLP extraction
         if not should_stop():
             logging.info("Stage 2: Extracting keywords with NLP")
+            if yield_status:
+                yield {'type': 'status', 'stage': 'nlp', 'message': 'Extracting keywords from title/description...'}
             
             # Gather text for analysis
             text_parts = []
@@ -2647,7 +2761,7 @@ JSON array:"""
             analysis_text = ' '.join(text_parts)
             
             if analysis_text:
-                extracted = self._extract_keywords_with_nlp(analysis_text, max_keywords=8)
+                extracted = self._extract_nouns_simple(analysis_text, max_nouns=8)
                 logging.info(f"NLP extracted keywords: {extracted}")
                 
                 for keyword in extracted:
@@ -2655,21 +2769,31 @@ JSON array:"""
                         break
                     
                     termdat_matches = self.search_termdat(keyword, query_lang, include_synonyms=True)
-                    add_unique_keywords(termdat_matches)
+                    added = add_unique_keywords(termdat_matches)
+                    if added:
+                        yield emit_keywords('nlp', is_final=False, query_text=analysis_text)
                     
                     if not should_stop():
                         gemet_matches = self.search_gemet(keyword)
-                        add_unique_keywords(gemet_matches)
+                        added = add_unique_keywords(gemet_matches)
+                        if added:
+                            yield emit_keywords('nlp', is_final=False, query_text=analysis_text)
                     
                     if not should_stop():
                         wikidata_matches = self.search_wikidata(keyword)
-                        add_unique_keywords(wikidata_matches)
+                        added = add_unique_keywords(wikidata_matches)
+                        if added:
+                            yield emit_keywords('nlp', is_final=False, query_text=analysis_text)
                 
                 logging.info(f"After Stage 2: {len(all_keywords)} keywords, {count_unique_labels()} unique")
+            if yield_status:
+                yield {'type': 'status', 'stage': 'nlp', 'message': 'NLP extraction finished'}
         
         # STAGE 3: If still < 10 matches, use OpenAI
         if not should_stop() and self.openai_api_key:
             logging.info("Stage 3: Extracting keywords with OpenAI")
+            if yield_status:
+                yield {'type': 'status', 'stage': 'openai', 'message': 'Expanding with OpenAI (synonyms/related)...'}
             
             # Gather all available text including publisher and themes
             text_parts = []
@@ -2711,22 +2835,28 @@ JSON array:"""
                                 break
                             
                             termdat_matches = self.search_termdat(keyword, query_lang, include_synonyms=True)
-                            add_unique_keywords(termdat_matches)
+                            added = add_unique_keywords(termdat_matches)
+                            if added:
+                                yield emit_keywords('openai', is_final=False, query_text=analysis_text)
                             
                             if not should_stop():
                                 gemet_matches = self.search_gemet(keyword)
-                                add_unique_keywords(gemet_matches)
+                                added = add_unique_keywords(gemet_matches)
+                                if added:
+                                    yield emit_keywords('openai', is_final=False, query_text=analysis_text)
                             
                             if not should_stop():
                                 wikidata_matches = self.search_wikidata(keyword)
-                                add_unique_keywords(wikidata_matches)
+                                added = add_unique_keywords(wikidata_matches)
+                                if added:
+                                    yield emit_keywords('openai', is_final=False, query_text=analysis_text)
                         
                         logging.info(f"After Stage 3: {len(all_keywords)} keywords, {count_unique_labels()} unique")
                 except Exception as e:
                     logging.error(f"OpenAI extraction failed: {e}")
-        
+
         logging.info(f"=== Final: {len(all_keywords)} keywords, {count_unique_labels()} unique ===")
-        return all_keywords
+        yield emit_keywords('complete', is_final=True, query_text=description)
 
 keyword_generator = KeywordGenerator()
 
@@ -2775,15 +2905,10 @@ def search_keywords_stream():
     if not query:
         return jsonify({'error': 'Query is required'}), 400
     
-    def generate():
-        """Generator function for Server-Sent Events"""
-        try:
-            # Use new Workflow 2
-            keywords = keyword_generator.generate_keywords_workflow2(query, query_lang, include_synonyms)
-            
-            # Sanitize keywords for JSON
-            sanitized = []
-            for kw in keywords:
+    def sanitize_keywords(keywords):
+        sanitized = []
+        for kw in keywords:
+            try:
                 sanitized.append({
                     'source': kw.get('source', ''),
                     'multilingual_label': kw.get('multilingual_label', {}),
@@ -2793,17 +2918,38 @@ def search_keywords_stream():
                     'query_lang': kw.get('query_lang', query_lang),
                     'available_languages': kw.get('available_languages', []),
                     'search_keyword': kw.get('search_keyword'),
-                    'source_type': kw.get('source_type', '')
+                    'source_type': kw.get('source_type', ''),
+                    'is_synonym_result': kw.get('is_synonym_result', False),
+                    'found_via_query': kw.get('found_via_query', query)
                 })
-            
-            # Send as single batch (final)
-            result = {
-                'batch': 'workflow2_results',
-                'keywords': sanitized,
-                'total': len(sanitized),
-                'is_final': True
-            }
-            yield f"data: {json.dumps(result)}\n\n"
+            except Exception as e:
+                logging.error(f"Error sanitizing streaming keyword: {e}")
+        return sanitized
+
+    def generate():
+        """Generator function for Server-Sent Events"""
+        try:
+            for event in keyword_generator.generate_keywords_streaming(query, query_lang, include_synonyms, yield_status=True):
+                if event.get('type') == 'status':
+                    payload = {
+                        'type': 'status',
+                        'stage': event.get('stage', 'info'),
+                        'message': event.get('message', '')
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    continue
+
+                sanitized_keywords = sanitize_keywords(event.get('keywords', []))
+                payload = {
+                    'type': 'keywords',
+                    'batch': event.get('batch', ''),
+                    'keywords': sanitized_keywords,
+                    'total': event.get('total', len(sanitized_keywords)),
+                    'is_final': event.get('is_final', False),
+                    'query': query,
+                    'query_lang': query_lang
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
         except Exception as e:
             logging.error(f"Streaming error: {e}", exc_info=True)
             yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
@@ -2989,6 +3135,69 @@ def generate_progressive_keywords():
     except Exception as e:
         logging.error(f"Workflow 1 keyword generation error: {e}", exc_info=True)
         return jsonify({'error': f'Error generating keywords: {str(e)}'}), 500
+
+@app.route('/generate-progressive-keywords-stream', methods=['POST'])
+def generate_progressive_keywords_stream():
+    """Streaming endpoint for Workflow 1 (I14Y integration)"""
+    data = request.json
+    i14y_item = data.get('i14y_item', {})
+    query_lang = data.get('lang', 'de').strip().lower()
+    include_synonyms = data.get('include_synonyms', True)
+
+    if not i14y_item:
+        return jsonify({'error': 'I14Y item data is required'}), 400
+
+    def sanitize_keywords(keywords):
+        sanitized = []
+        for kw in keywords:
+            try:
+                sanitized.append({
+                    'source': kw.get('source', ''),
+                    'multilingual_label': kw.get('multilingual_label', {}),
+                    'uri': kw.get('uri', ''),
+                    'description': kw.get('description', ''),
+                    'entry_id': kw.get('entry_id', ''),
+                    'query_lang': kw.get('query_lang', query_lang),
+                    'available_languages': kw.get('available_languages', list(kw.get('multilingual_label', {}).keys())),
+                    'source_type': kw.get('source_type', ''),
+                    'is_synonym_result': kw.get('is_synonym_result', False)
+                })
+            except Exception as e:
+                logging.error(f"Error sanitizing workflow1 keyword: {e}")
+        return sanitized
+
+    def generate():
+        try:
+            for event in keyword_generator.generate_keywords_progressive_stream(
+                i14y_item,
+                query_lang=query_lang,
+                include_synonyms=include_synonyms,
+                yield_status=True
+            ):
+                if event.get('type') == 'status':
+                    payload = {
+                        'type': 'status',
+                        'stage': event.get('stage', 'info'),
+                        'message': event.get('message', '')
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    continue
+
+                sanitized_keywords = sanitize_keywords(event.get('keywords', []))
+                payload = {
+                    'type': 'keywords',
+                    'batch': event.get('batch', ''),
+                    'keywords': sanitized_keywords,
+                    'total': event.get('total', len(sanitized_keywords)),
+                    'is_final': event.get('is_final', False),
+                    'query_lang': query_lang
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+        except Exception as e:
+            logging.error(f"Streaming error (workflow1): {e}", exc_info=True)
+            yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
 @app.route('/upload')
 def upload_keywords():

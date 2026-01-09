@@ -175,6 +175,8 @@
 
         const selectedKeywords = new Set();
         const searchHistory = [];
+        const streamingKeywordMap = new Map();
+        let streamingSynonymCount = 0;
 
 
 
@@ -328,9 +330,11 @@
         }
         
         async function performStreamingSearch(query, includeSynonyms) {
-            let allKeywords = [];
-            let isFirstBatch = true;
-            
+            streamingKeywordMap.clear();
+            streamingSynonymCount = 0;
+            window.keywordsData = [];
+            let firstKeywordBatch = true;
+
             return new Promise((resolve, reject) => {
                 fetch('/search-stream', {
                     method: 'POST',
@@ -347,11 +351,11 @@
                     if (!response.ok) {
                         throw new Error(`Server error (${response.status})`);
                     }
-                    
+
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder();
                     let buffer = '';
-                    
+
                     function processChunk() {
                         reader.read().then(({ done, value }) => {
                             if (done) {
@@ -359,51 +363,63 @@
                                 resolve();
                                 return;
                             }
-                            
+
                             buffer += decoder.decode(value, { stream: true });
                             const lines = buffer.split('\n\n');
-                            buffer = lines.pop(); // Keep incomplete line in buffer
-                            
+                            buffer = lines.pop();
+
                             for (const line of lines) {
-                                if (line.startsWith('data: ')) {
-                                    try {
-                                        const data = JSON.parse(line.substring(6));
-                                        
-                                        console.log('Received batch:', data.batch, 'Keywords:', data.total);
-                                        
-                                        if (data.error) {
-                                            reject(new Error(data.error));
-                                            return;
-                                        }
-                                        
-                                        if (isFirstBatch) {
-                                            console.log('Displaying first batch - exact matches');
-                                            setStatus('Showing exact matches...', 'success');
-                                            isFirstBatch = false;
-                                            showResults();
-                                        } else if (data.batch === 'with_synonyms') {
-                                            console.log('Updating with synonym results');
-                                            setStatus('Adding synonym-based results...', 'synonyms');
-                                        }
-                                        
-                                        // Display progressive results
-                                        displayResults({
-                                            query: query,
-                                            keywords: data.keywords,
-                                            total: data.total,
-                                            is_final: data.is_final
-                                        });
-                                        
-                                    } catch (e) {
-                                        console.error('Error parsing SSE data:', e, 'Line:', line);
+                                if (!line.startsWith('data: ')) {
+                                    continue;
+                                }
+
+                                try {
+                                    const data = JSON.parse(line.substring(6));
+
+                                    if (data.error) {
+                                        reject(new Error(data.error));
+                                        return;
                                     }
+
+                                    if (data.type === 'status') {
+                                        setStatus(data.message || 'Working...', data.stage || 'default');
+                                        continue;
+                                    }
+
+                                    if (data.type !== 'keywords') {
+                                        continue;
+                                    }
+
+                                    const aggregated = upsertStreamingKeywords(data.keywords || []);
+                                    const payload = {
+                                        query: data.query || query,
+                                        query_lang: data.query_lang || 'de',
+                                        keywords: aggregated,
+                                        total: aggregated.length,
+                                        synonym_count: streamingSynonymCount
+                                    };
+
+                                    window.keywordsData = payload.keywords;
+                                    displayResults(payload);
+
+                                    if (firstKeywordBatch && aggregated.length > 0) {
+                                        setStatus('Showing first matches...', 'success');
+                                        showResults();
+                                        firstKeywordBatch = false;
+                                    }
+
+                                    if (data.is_final) {
+                                        setStatus('Keyword discovery complete', 'success');
+                                    }
+                                } catch (e) {
+                                    console.error('Error parsing SSE data:', e, 'Line:', line);
                                 }
                             }
-                            
+
                             processChunk();
                         }).catch(reject);
                     }
-                    
+
                     processChunk();
                 })
                 .catch(reject);
@@ -449,6 +465,36 @@
             } else {
                 connectI14YBtn.textContent = 'Upload to I14Y';
             }
+        }
+
+        function keywordKey(keyword) {
+            if (!keyword) return '';
+            const uri = (keyword.uri || '').trim();
+            if (uri) return uri.toLowerCase();
+            const labels = keyword.multilingual_label || {};
+            const labelText = labels.de || labels.en || labels.fr || labels.it || keyword.label || '';
+            const normalized = labelText.trim().toLowerCase();
+            if (normalized) return normalized;
+            if (keyword.entry_id) return String(keyword.entry_id).toLowerCase();
+            return JSON.stringify(keyword).toLowerCase();
+        }
+
+        function upsertStreamingKeywords(keywords = []) {
+            let newSynonyms = 0;
+            keywords.forEach((kw) => {
+                const key = keywordKey(kw);
+                if (!streamingKeywordMap.has(key)) {
+                    streamingKeywordMap.set(key, kw);
+                } else {
+                    // Overwrite to keep freshest metadata (e.g., is_synonym_result flag)
+                    streamingKeywordMap.set(key, { ...streamingKeywordMap.get(key), ...kw });
+                }
+                if (kw.is_synonym_result) {
+                    newSynonyms += 1;
+                }
+            });
+            streamingSynonymCount += newSynonyms;
+            return Array.from(streamingKeywordMap.values());
         }
 
         function displayResults(data) {
@@ -577,8 +623,6 @@
  
         function showResults() {
             resultsSection.style.display = 'block';
-            // clear status when results are visible
-            clearStatus();
         }
  
         function hideResults() {
