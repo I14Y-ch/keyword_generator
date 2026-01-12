@@ -1657,7 +1657,8 @@ JSON array:"""
                 
                 logging.info(f"GEMET Search Strategy: {strategy}")
                 try:
-                    search_response = self.session.get(search_url, params=search_params, timeout=10, verify=self.verify_ssl)
+                    # Use 30 second timeout - GEMET API can be slow
+                    search_response = self.session.get(search_url, params=search_params, timeout=30, verify=self.verify_ssl)
                     logging.info(f"GEMET Search Response status: {search_response.status_code}")
                     
                     if search_response.status_code == 200:
@@ -1670,8 +1671,12 @@ JSON array:"""
                             # Mark this as a fallback result if we're using a related term
                             if strategy['keyword'] != query.lower():
                                 logging.info(f"Used fallback term '{strategy['keyword']}' for original query '{query}'")
+                except requests.exceptions.Timeout:
+                    logging.warning(f"GEMET API timeout for query '{strategy['keyword']}' - server may be slow, skipping this strategy")
+                except requests.exceptions.RequestException as e:
+                    logging.warning(f"GEMET API request failed for '{strategy['keyword']}': {e}")
                 except Exception as e:
-                    logging.error(f"Error in GEMET search strategy: {e}")
+                    logging.error(f"Unexpected error in GEMET search strategy: {e}")
             
             # If we have found concepts, process them
             if found_concepts:
@@ -1783,7 +1788,7 @@ JSON array:"""
                                 'language': lang
                             }
                             
-                            fallback_response = self.session.get(search_url, params=search_params, timeout=10, verify=self.verify_ssl)
+                            fallback_response = self.session.get(search_url, params=search_params, timeout=30, verify=self.verify_ssl)
                             if fallback_response.status_code == 200:
                                 fallback_concepts = fallback_response.json()
                                 if fallback_concepts:
@@ -1849,7 +1854,7 @@ JSON array:"""
                     'language': language
                 }
                 
-                response = self.session.get(url, params=params, timeout=5, verify=self.verify_ssl)
+                response = self.session.get(url, params=params, timeout=30, verify=self.verify_ssl)
                 if response.status_code == 200:
                     data = response.json()
                     if 'definition' in data and 'string' in data['definition']:
@@ -1883,7 +1888,7 @@ JSON array:"""
                 'property_uri': 'http://www.w3.org/2004/02/skos/core#prefLabel'
             }
             
-            response = self.session.get(url, params=params, timeout=8, verify=self.verify_ssl)
+            response = self.session.get(url, params=params, timeout=30, verify=self.verify_ssl)
             logging.info(f"GEMET translations response status: {response.status_code}")
             
             if response.status_code == 200:
@@ -2882,18 +2887,13 @@ def refine_step1():
 
 @app.route('/refine/step2')
 def refine_step2():
-    """Step 2: Review current item details"""
+    """Step 2: Review, arrange, and select keywords"""
     return render_template('refine_step2.html')
 
 @app.route('/refine/step3')
 def refine_step3():
-    """Step 3: Review, arrange, and select keywords"""
+    """Step 3: Update keywords on I14Y"""
     return render_template('refine_step3.html')
-
-@app.route('/refine/step4')
-def refine_step4():
-    """Step 4: Update keywords on I14Y"""
-    return render_template('refine_step4.html')
 
 @app.route('/search-stream', methods=['POST'])
 def search_keywords_stream():
@@ -3631,7 +3631,33 @@ def get_i14y_object():
         payload = response.json()
         full_object = payload.get('data', payload)
 
-        return jsonify({'fullObject': full_object})
+        # Check contactPoints for missing emails (required by I14Y system)
+        missing_contact_emails = []
+        contact_points = full_object.get('contactPoints', [])
+        if isinstance(contact_points, list):
+            for idx, contact in enumerate(contact_points):
+                if isinstance(contact, dict):
+                    email = contact.get('email', '').strip()
+                    if not email:
+                        # Collect info about this contact for frontend to show input field
+                        name_field = contact.get('name', {})
+                        if isinstance(name_field, dict):
+                            name = name_field.get('de') or name_field.get('en') or name_field.get('fr') or 'Contact'
+                        else:
+                            name = str(name_field) if name_field else f'Contact {idx + 1}'
+                        missing_contact_emails.append({
+                            'index': idx,
+                            'name': name,
+                            'email': ''
+                        })
+
+        return jsonify({
+            'fullObject': full_object,
+            'validation': {
+                'missingContactEmails': missing_contact_emails,
+                'hasIssues': len(missing_contact_emails) > 0
+            }
+        })
 
     except Exception as e:
         logging.error(f"Error fetching I14Y object: {e}", exc_info=True)
@@ -3647,9 +3673,6 @@ def update_i14y_keywords():
         object_type = (data.get('objectType') or data.get('object_type') or 'dataset').lower()
         keywords = data.get('keywords', [])
         api_token = data.get('apiToken') or data.get('api_token')
-        full_dataset = data.get('fullDataset') or data.get('full_dataset') or {}
-        if not isinstance(full_dataset, dict):
-            full_dataset = {}
         
         if not object_id:
             return jsonify({'error': 'Object ID is required'}), 400
@@ -3675,8 +3698,7 @@ def update_i14y_keywords():
         if not endpoint:
             return jsonify({'error': f'Unknown object type: {object_type}'}), 400
         
-        # Format keywords according to new I14Y structure
-        # New structure: {"label": {"de": "...", "en": "...", "fr": "...", "it": "...", "rm": "..."}, "uri": "..."}
+        # Format keywords according to I14Y structure
         formatted_keywords = []
         for kw in keywords:
             keyword_obj = {
@@ -3694,10 +3716,9 @@ def update_i14y_keywords():
                     'it': ml.get('it', ''),
                     'rm': ml.get('rm', '')
                 }
-            # Handle plain label string (from Wikidata or fallback)
+            # Handle plain label string
             elif 'label' in kw:
                 label_text = kw['label']
-                # Distribute to all languages if we have a plain string
                 keyword_obj['label'] = {
                     'de': label_text,
                     'en': label_text,
@@ -3706,11 +3727,9 @@ def update_i14y_keywords():
                     'rm': label_text
                 }
             else:
-                # Fallback: no label found
                 logging.warning(f"Keyword has no label: {kw}")
                 continue
             
-            # Skip keywords without a URI to satisfy I14Y validator
             if not keyword_obj.get('uri'):
                 logging.info(f"Skipping keyword without URI: {keyword_obj}")
                 continue
@@ -3720,62 +3739,16 @@ def update_i14y_keywords():
         if not formatted_keywords:
             return jsonify({'error': 'No valid keywords to update'}), 400
         
-        # Prepare the PUT request body
-        # We need to send the full object back with updated keywords
-        # Get the fullObject from the dataset
-        full_object = (
-            full_dataset.get('fullObject') or
-            full_dataset.get('full_object') or
-            data.get('fullObject') or
-            data.get('full_object') or {}
-        )
-        
-        # If fullObject is not available, create minimal required structure
-        if not full_object:
-            logging.warning("fullObject not available in dataset, creating minimal structure")
-            full_object = {
-                'title': full_dataset.get('title', {}),
-                'description': full_dataset.get('description', {}),
-                'identifier': full_dataset.get('guid') or full_dataset.get('id'),
-            }
-        
-        # Start with the existing data and update only the keywords field
-        update_data = full_object.copy()
-        
-        # Update keywords in the payload
-        update_data['keywords'] = formatted_keywords
-        
-        # For dataservices/publicservices, ensure publisher is in IdentifierInputModel format
-        # (GET returns AgentModel with 'identifier' field, PUT expects IdentifierInputModel)
-        if object_type in ['dataservice', 'publicservice']:
-            if 'publisher' in update_data and isinstance(update_data['publisher'], dict):
-                # If publisher has 'identifier' as a nested field, flatten it
-                if 'identifier' in update_data['publisher']:
-                    update_data['publisher'] = {'identifier': update_data['publisher']['identifier']}
-        
-        # Remove read-only fields that shouldn't be sent in PUT
-        # These fields are returned by GET but should not be included in PUT
-        readonly_fields = ['id', 'guid', 'publicationLevel', 'publicationLevelProposal', 
-                          'registrationStatus', 'registrationStatusProposal',
-                          'isLocked', 'codeListEntries']
-        for field in readonly_fields:
-            update_data.pop(field, None)
-        
-        # Wrap in data object as required by API
-        update_payload = {
-            "data": update_data
-        }
-        
-        # Pick Partner API base by env
+        # Determine environment
         env = data.get('env', 'prod').lower()
         if env not in ['abnahme', 'prod']:
             env = 'prod'
-
+        
         partner_base = {
             'abnahme': 'https://api-a.i14y.admin.ch/api/partner/v1',
             'prod': 'https://api.i14y.admin.ch/api/partner/v1'
         }[env]
-
+        
         partner_api_url = f'{partner_base}{endpoint}'
         
         headers = {
@@ -3784,20 +3757,64 @@ def update_i14y_keywords():
             'Accept': 'application/json'
         }
         
-        print(f"Updating {object_type} {object_id} on I14Y with {len(formatted_keywords)} keywords")
-        print(f"PUT URL: {partner_api_url}")
-        print(f"Full PUT payload:\n{json.dumps(update_payload, indent=2, ensure_ascii=False)}")
+        verify_ssl = NETWORK_ENV != "internal"
         
-        response = http_session.put(
+        # Step 1: GET the current object from Partner API
+        logging.info(f"Getting current {object_type} {object_id} from Partner API")
+        get_response = http_session.get(partner_api_url, headers=headers, timeout=30, verify=verify_ssl)
+        
+        if not get_response.ok:
+            error_msg = f"Failed to GET {object_type} from Partner API: HTTP {get_response.status_code}"
+            logging.error(error_msg)
+            try:
+                error_details = get_response.json()
+                return jsonify({'error': error_msg, 'details': error_details}), get_response.status_code
+            except:
+                return jsonify({'error': error_msg, 'details': get_response.text}), get_response.status_code
+        
+        # Step 2: Parse the response and extract data
+        current_object = get_response.json()
+        if 'data' not in current_object:
+            return jsonify({'error': 'Invalid response from I14Y API - missing data field'}), 500
+        
+        update_data = current_object['data']
+        
+        # Step 3: Update only the keywords field
+        update_data['keywords'] = formatted_keywords
+        
+        # Step 4: Apply user-provided contact emails if any (from frontend validation)
+        contact_email_updates = data.get('contactEmailUpdates')
+        if contact_email_updates and isinstance(contact_email_updates, list):
+            contact_points = update_data.get('contactPoints', [])
+            if isinstance(contact_points, list):
+                for email_update in contact_email_updates:
+                    idx = email_update.get('index')
+                    email = email_update.get('email', '').strip()
+                    if idx is not None and 0 <= idx < len(contact_points) and email:
+                        if isinstance(contact_points[idx], dict):
+                            # For dataservices, use hasEmail; for others, use email
+                            if object_type == 'dataservice':
+                                contact_points[idx]['hasEmail'] = email
+                            else:
+                                contact_points[idx]['email'] = email
+                            logging.info(f"Updated contactPoint[{idx}] with email: {email}")
+                update_data['contactPoints'] = contact_points
+        
+        # Step 5: Wrap in data object and send PUT request
+        update_payload = {"data": update_data}
+        
+        logging.info(f"Updating {object_type} {object_id} on I14Y with {len(formatted_keywords)} keywords")
+        
+        put_response = http_session.put(
             partner_api_url,
             json=update_payload,
             headers=headers,
-            timeout=30
+            timeout=30,
+            verify=verify_ssl
         )
         
         # Check response
-        if response.status_code == 204:
-            # Success - No Content
+        if put_response.status_code == 204:
             logging.info(f"Successfully updated keywords for {object_type} {object_id}")
             return jsonify({
                 'success': True,
@@ -3805,25 +3822,13 @@ def update_i14y_keywords():
                 'object_id': object_id,
                 'object_type': object_type
             })
-        elif response.status_code >= 400: 
-            print(response.text)
-            
-        elif response.status_code == 401:
-            return jsonify({'error': 'Unauthorized - Invalid API token'}), 401
-        elif response.status_code == 403:
-            return jsonify({'error': 'Forbidden - You do not have permission to update this object'}), 403
-        elif response.status_code == 404:
-            return jsonify({'error': f'Object not found: {object_type} {object_id}'}), 404
         else:
-            # Try to get error details from response
             try:
-                error_data = response.json()
-                error_msg = error_data.get('title') or error_data.get('detail') or str(error_data)
-            except:
-                error_msg = response.text or f'HTTP {response.status_code}'
-            
-            logging.error(f"I14Y API error: {response.status_code} - {error_msg}")
-            return jsonify({'error': f'I14Y API error: {error_msg}'}), response.status_code
+                err_json = put_response.json()
+            except Exception:
+                err_json = {'error': put_response.text or f'HTTP {put_response.status_code}'}
+            logging.error(f"I14Y API error: {put_response.status_code} - {err_json}")
+            return jsonify({'error': 'I14Y API error', 'details': err_json}), put_response.status_code
             
     except requests.exceptions.Timeout:
         logging.error("I14Y API request timed out")

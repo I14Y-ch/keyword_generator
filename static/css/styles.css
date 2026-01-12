@@ -1089,65 +1089,6 @@ footer {
 }
 
 /* Step Navigation Styles */
-.steps-nav {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 30px 0;
-    padding: 0;
-    list-style: none;
-}
-.step-item {
-    display: flex;
-    align-items: center;
-    flex: 0 0 auto;
-}
-.step-link {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 20px;
-    background: #f3f4f6;
-    color: #6b7280;
-    text-decoration: none;
-    border-radius: 6px;
-    font-weight: 500;
-    transition: all 0.2s ease;
-}
-.step-link:hover {
-    background: #e5e7eb;
-}
-.step-link.active {
-    background: #3182ce;
-    color: white;
-}
-.step-link.completed {
-    background: #059669;
-    color: white;
-    cursor: pointer;
-}
-.step-link.completed:hover {
-    background: #047857;
-}
-.step-link.disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-}
-.step-number {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: rgba(255,255,255,0.3);
-    font-size: 0.85em;
-    font-weight: 600;
-}
-.step-arrow {
-    margin: 0 10px;
-    color: #d1d5db;
-}
 
 /* Environment Toggle Styles */
 .env-toggle-container {
@@ -1219,10 +1160,6 @@ input:checked + .env-slider:before {
 .keyword-card.selected {
     border-color: #059669;
     box-shadow: 0 4px 12px rgba(5,150,105,0.15);
-}
-.keyword-card.drag-over {
-    border-color: #3182ce;
-    box-shadow: 0 4px 12px rgba(49,130,206,0.15);
 }
 .keyword-card-header {
     display: flex;

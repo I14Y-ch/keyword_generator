@@ -25,7 +25,7 @@
     
     <main>
         <div class="container">
-            <a href="{{ url_for('refine_step3') }}" class="back-link">Back to Arrangement</a>
+            <a href="{{ url_for('refine_step2') }}" class="back-link">Back to Arrangement</a>
             
             <div class="page-header">
                 <h1>Update Keywords on I14Y</h1>
@@ -34,7 +34,7 @@
             
             <div class="step-indicator-bar">
                 <div class="step-progress" style="width: 100%;"></div>
-                <span class="step-text">Step 4 of 4: Update I14Y</span>
+                <span class="step-text">Step 3 of 3: Update I14Y</span>
             </div>
             
             <div class="workflow-section">
@@ -133,7 +133,7 @@
                 finalKeywords = JSON.parse(storedSelected);
             }
             if (!finalKeywords || finalKeywords.length === 0) {
-                window.location.href = '/refine/step3';
+                window.location.href = '/refine/step2';
                 return;
             }
             
@@ -213,7 +213,7 @@
                 
                 if (response.ok && data.success) {
                     document.getElementById('success').innerHTML = `
-                        <div style="padding: 20px; background: #ecfdf5; border-left: 4px solid #059669; border-radius: 4px;">
+                        <div style="padding: 20px; background: #d1fae5; border-left: 4px solid #059669; border-radius: 4px;">
                             <h3 style="margin: 0 0 10px 0; color: #059669;">✓ Keywords Updated Successfully!</h3>
                             <p style="margin: 0; color: #064e3b;">
                                 The keywords have been updated on I14Y. You can now view the updated item on I14Y.

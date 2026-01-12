@@ -31,21 +31,7 @@
                 <p class="page-lead">Search for an existing I14Y item and improve its keywords</p>
             </div>
 
-            <ul class="steps-nav">
-                <li class="step-item">
-                    <span class="step-link active">
-                        <span class="step-number">1</span>
-                        <span>Search I14Y</span>
-                    </span>
-                </li>
-                <li class="step-arrow">→</li>
-                <li class="step-item">
-                    <span class="step-link disabled">
-                        <span class="step-number">2</span>
-                        <span>Arrange & Update</span>
-                    </span>
-                </li>
-            </ul>
+            
             
             <div class="workflow-section">
                 <h2 class="section-title">Search for I14Y Item</h2>
@@ -335,7 +321,7 @@
             // Start generating keywords immediately for selected item
             const description = item.description || item.title || '';
             sessionStorage.setItem('keywordQuery', description);
-            window.location.href = '/refine/step3';
+            window.location.href = '/refine/step2';
         }
         
         function displaySearchResults(results) {
