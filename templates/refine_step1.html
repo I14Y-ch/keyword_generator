@@ -205,7 +205,14 @@
                 return;
             }
             
-            document.getElementById('loading').style.display = 'block';
+            const loadingOverlay = document.getElementById('loading');
+            const loadingText = loadingOverlay ? loadingOverlay.querySelector('p') : null;
+            if (loadingOverlay) {
+                if (loadingText) {
+                    loadingText.textContent = 'Searching I14Y...';
+                }
+                loadingOverlay.style.display = 'flex';
+            }
             document.getElementById('searchStatus').textContent = 'Searching...';
             document.getElementById('i14yResults').style.display = 'none';
             
@@ -235,7 +242,9 @@
                 document.getElementById('error').style.display = 'block';
                 document.getElementById('searchStatus').textContent = 'Search failed';
             } finally {
-                document.getElementById('loading').style.display = 'none';
+                if (loadingOverlay) {
+                    loadingOverlay.style.display = 'none';
+                }
             }
         });
         
@@ -314,13 +323,65 @@
             }
         }
         
-        function selectItem(index) {
+        async function selectItem(index) {
             const item = cachedSearchResults[index];
-            // Store in sessionStorage and navigate to step 3 (skipping step 2)
+            if (!item) {
+                return;
+            }
+
+            const loadingOverlay = document.getElementById('loading');
+            const loadingText = loadingOverlay ? loadingOverlay.querySelector('p') : null;
+            if (loadingOverlay) {
+                if (loadingText) {
+                    loadingText.textContent = 'Loading I14Y entry...';
+                }
+                loadingOverlay.style.display = 'flex';
+            }
+
+            try {
+                const objectId = item.guid || item.id || item.identifier;
+                const objectType = item.objectType || 'dataset';
+
+                if (objectId) {
+                    const response = await fetch('/get-i14y-object', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            objectId,
+                            objectType,
+                            env: currentEnv
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data && typeof data === 'object') {
+                            if (data.fullObject) {
+                                item.fullObject = data.fullObject;
+                            }
+                            if (data.validation) {
+                                item.validation = data.validation;
+                            }
+                        }
+                    } else {
+                        console.warn('Failed to load full I14Y object:', response.status);
+                    }
+                }
+            } catch (err) {
+                console.warn('Error while loading full I14Y object:', err);
+            } finally {
+                if (loadingOverlay) {
+                    loadingOverlay.style.display = 'none';
+                }
+            }
+
+            // Store enriched item and navigate to refinement step
             sessionStorage.setItem('selectedI14YItem', JSON.stringify(item));
-            // Start generating keywords immediately for selected item
             const description = item.description || item.title || '';
             sessionStorage.setItem('keywordQuery', description);
+            if (currentEnv) {
+                sessionStorage.setItem('i14yEnv', currentEnv);
+            }
             window.location.href = '/refine/step2';
         }
         

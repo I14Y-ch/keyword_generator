@@ -185,16 +185,28 @@
             // Check and display missing contact email inputs if needed
             displayMissingEmailInputs();
             
+            // Extract and display existing keywords IMMEDIATELY
             existingKeywords = extractExistingKeywords();
+            console.log('[DEBUG] Selected item keys:', Object.keys(selectedItem || {}));
+            console.log('[DEBUG] Selected item fullObject keys:', selectedItem && selectedItem.fullObject ? Object.keys(selectedItem.fullObject) : 'no fullObject');
+            console.log('[DEBUG] Extracted existing keywords:', existingKeywords.length, existingKeywords);
             existingIdentitySet = new Set(existingKeywords.map(buildKeywordIdentity).filter(Boolean));
             combinedKeywords = [...existingKeywords]; // Start with existing keywords
+            
+            // FORCE immediate display of existing keywords
             displayCombinedKeywords();
             updateKeywordCount();
+            console.log('[DEBUG] Displayed existing keywords immediately');
+            
             sessionStorage.setItem('finalKeywords', JSON.stringify(combinedKeywords));
             
             if (storedQuery) {
-                // Progressive generation mode
-                startProgressiveGeneration(storedQuery);
+                // Progressive generation mode - ensure existing keywords remain visible
+                // Use setTimeout to ensure the DOM has time to render existing keywords before starting async stream
+                console.log('[DEBUG] Starting progressive generation with query:', storedQuery);
+                setTimeout(() => {
+                    startProgressiveGeneration(storedQuery);
+                }, 10); // 10ms delay ensures existing keywords are rendered first
             } else {
                 // Fallback: check for pre-generated keywords
                 const storedKeywords = sessionStorage.getItem('generatedKeywords');
@@ -625,20 +637,59 @@
         }
 
         function extractExistingKeywords() {
-            let keywords = [];
-            if (selectedItem && selectedItem.fullObject) {
-                keywords = selectedItem.fullObject.keywords ||
-                           selectedItem.fullObject.keyword ||
-                           selectedItem.fullObject.theme || [];
-            } else if (selectedItem && selectedItem.keywords) {
-                keywords = selectedItem.keywords;
-            } else if (selectedItem && selectedItem.keyword) {
-                keywords = selectedItem.keyword;
-            } else if (selectedItem && selectedItem.theme) {
-                keywords = selectedItem.theme;
+            const visited = new Set();
+
+            function isLikelyKeywordEntry(entry) {
+                if (!entry) return false;
+                if (typeof entry === 'string') return entry.trim().length > 0;
+                if (typeof entry === 'object') {
+                    return Boolean(entry.uri || entry._uri || entry.label || entry.multilingual_label || entry.de || entry.en);
+                }
+                return false;
             }
 
-            if (!Array.isArray(keywords)) {
+            function findKeywordArray(node) {
+                if (!node || typeof node !== 'object') return null;
+                if (visited.has(node)) return null;
+                visited.add(node);
+
+                const candidateFields = ['keywords', 'keyword', 'theme'];
+                for (const field of candidateFields) {
+                    const value = node[field];
+                    if (Array.isArray(value) && value.length && isLikelyKeywordEntry(value[0])) {
+                        return value;
+                    }
+                }
+
+                for (const key of Object.keys(node)) {
+                    const child = node[key];
+                    if (!child) continue;
+
+                    if (Array.isArray(child)) {
+                        if (visited.has(child)) continue;
+                        visited.add(child);
+                        for (const item of child) {
+                            if (item && typeof item === 'object') {
+                                const result = findKeywordArray(item);
+                                if (Array.isArray(result) && result.length) {
+                                    return result;
+                                }
+                            }
+                        }
+                    } else if (typeof child === 'object') {
+                        const result = findKeywordArray(child);
+                        if (Array.isArray(result) && result.length) {
+                            return result;
+                        }
+                    }
+                }
+
+                return null;
+            }
+
+            let keywords = findKeywordArray(selectedItem) || [];
+
+            if (!Array.isArray(keywords) || keywords.length === 0) {
                 return [];
             }
 
