@@ -33,6 +33,21 @@
 
             
 
+            <!-- Locked Concept Warning -->
+            <div id="lockedWarning" style="display: none; background: #fef3c7; border: 2px solid #f59e0b; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px;">
+                <div style="display: flex; gap: 12px; align-items: start;">
+                    <span style="font-size: 1.5em;">🔒</span>
+                    <div>
+                        <div style="font-weight: 600; color: #92400e; margin-bottom: 6px;">Locked Concept - Keywords Cannot Be Modified</div>
+                        <div style="color: #78350f; font-size: 0.95em; line-height: 1.5;">
+                            This concept is locked and its keywords cannot be altered through the I14Y user interface. 
+                            If you need to modify the keywords, please contact the I14Y team for assistance at 
+                            <a href="mailto:i14y@bfs.admin.ch" style="color: #92400e; text-decoration: underline;">i14y@bfs.admin.ch</a>.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Info Row: left = item info, right = custom keyword input -->
             <div id="infoRow" style="display: flex; gap: 16px; align-items: stretch; margin-bottom: 24px;">
                 <!-- Item Information Card -->
@@ -56,6 +71,12 @@
                         <div>
                             <strong style="color: #64748b; font-weight: 500; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.3px;">Status:</strong>
                             <span id="itemStatus" style="color: #475569; margin-left: 6px;"></span>
+                        </div>
+                        <div style="border-left: 2px solid #e2e8f0; height: 18px;" id="linkDivider"></div>
+                        <div id="itemLinkContainer">
+                            <a id="itemLink" href="#" target="_blank" rel="noopener noreferrer" style="color: #0369a1; text-decoration: none; font-weight: 500; font-size: 0.9em;">
+                                View on I14Y →
+                            </a>
                         </div>
                     </div>
                     <div id="itemDescriptionContainer" style="padding-top: 8px; border-top: 1px solid #f1f5f9;">
@@ -81,31 +102,19 @@
                 </div>
             </div>
 
-            <!-- Missing Contact Emails Section -->
-            <div id="missingEmailsSection" style="display: none; margin-bottom: 24px; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 18px 20px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);">
-                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-                    <span style="font-size: 24px;">⚠️</span>
-                    <div>
-                        <h3 style="margin: 0; color: #92400e; font-size: 1.05em; font-weight: 600;">Missing Contact Information</h3>
-                        <p style="margin: 4px 0 0 0; color: #78350f; font-size: 0.92em;">The I14Y system requires email addresses for all contact points. Please provide the missing email(s):</p>
-                    </div>
-                </div>
-                <div id="missingEmailsInputs" style="display: flex; flex-direction: column; gap: 12px; padding-left: 36px;"></div>
-            </div>
-
             <div class="workflow-section">
                 
-                <div id="loadingStatus" style="display:none; margin-bottom:20px; padding:15px; background:#f0f9ff; border-left:4px solid #0ea5e9; border-radius:6px;">
-                    <div style="display:flex; align-items:center; gap:12px;">
-                        <div class="spinner" style="width:20px; height:20px; border-width:3px;"></div>
-                        <span id="statusText" style="font-weight:600; color:#0c4a6e;">Initializing...</span>
+                <div id="loadingStatus" style="display:none; margin:20px 0; padding:30px 20px; background:linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border:2px solid #0ea5e9; border-radius:12px; box-shadow:0 4px 12px rgba(14, 165, 233, 0.15);">
+                    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;">
+                        <div class="spinner" style="width:36px; height:36px; border-width:4px; border-color:#0ea5e9; border-top-color:transparent;"></div>
+                        <span id="statusText" style="font-weight:600; color:#0c4a6e; font-size:1.05em; text-align:center; max-width:600px; line-height:1.5;">Initializing...</span>
                     </div>
                 </div>
                 
                 <div class="keyword-section">
                     <div class="selection-info" style="margin-bottom:12px; display:flex; flex-direction:column; gap:4px;">
                         <span id="keywordCount" style="font-weight: 600;">0 keywords total</span>
-                        <span style="font-size:0.9em; color:#6b7280;">Click to select/deselect; click ✕ to delete</span>
+                        <span style="font-size:0.9em; color:#6b7280;">Click to select/deselect</span>
                     </div>
                     <div id="combinedKeywordsGrid" class="keyword-grid"></div>
                 </div>
@@ -182,9 +191,6 @@
             // Display item information
             displayItemInfo();
             
-            // Check and display missing contact email inputs if needed
-            displayMissingEmailInputs();
-            
             // Extract and display existing keywords IMMEDIATELY
             existingKeywords = extractExistingKeywords();
             console.log('[DEBUG] Selected item keys:', Object.keys(selectedItem || {}));
@@ -223,6 +229,40 @@
             const card = document.getElementById('itemInfoCard');
             if (!card || !selectedItem) return;
             
+            // Check if this is a locked concept and show warning
+            const isLockedConcept = selectedItem.objectType === 'concept' && selectedItem.isLocked === true;
+            const lockedWarning = document.getElementById('lockedWarning');
+            
+            // Debug logging
+            console.log('[DEBUG displayItemInfo] Selected item:', {
+                objectType: selectedItem.objectType,
+                isLocked: selectedItem.isLocked,
+                title: selectedItem.title
+            });
+            console.log('[DEBUG displayItemInfo] isLockedConcept check:', {
+                objectType: selectedItem.objectType,
+                isConceptCheck: selectedItem.objectType === 'concept',
+                isLocked: selectedItem.isLocked,
+                isLockedCheck: selectedItem.isLocked === true,
+                result: isLockedConcept
+            });
+            
+            if (lockedWarning) {
+                lockedWarning.style.display = isLockedConcept ? 'block' : 'none';
+                console.log('[DEBUG displayItemInfo] Warning display set to:', isLockedConcept ? 'block' : 'none');
+            }
+            
+            // Disable the "Update on I14Y" button for locked concepts
+            const proceedToUpdateBtn = document.getElementById('proceedToUpdateBtn');
+            if (proceedToUpdateBtn) {
+                proceedToUpdateBtn.disabled = isLockedConcept;
+                if (isLockedConcept) {
+                    proceedToUpdateBtn.title = 'Cannot update locked concepts. Please contact I14Y at i14y@bfs.admin.ch for assistance.';
+                } else {
+                    proceedToUpdateBtn.title = 'Append the keywords to the existing entry on I14Y. A user token is needed. Be aware: Don\'t use your personal token if you don\'t trust the application. If you don\'t trust, use the View JSON button.';
+                }
+            }
+            
             // Extract type
             const objectType = selectedItem.objectType || selectedItem.type || 'Unknown';
             document.getElementById('itemType').textContent = objectType.charAt(0).toUpperCase() + objectType.slice(1);
@@ -253,70 +293,24 @@
                 : description || 'No description available';
             document.getElementById('itemDescription').textContent = truncatedDesc;
             
+            // Set the I14Y link
+            const itemLink = document.getElementById('itemLink');
+            const linkContainer = document.getElementById('itemLinkContainer');
+            const linkDivider = document.getElementById('linkDivider');
+            if (selectedItem.url && selectedItem.url.trim()) {
+                itemLink.href = selectedItem.url;
+                if (linkContainer) linkContainer.style.display = 'block';
+                if (linkDivider) linkDivider.style.display = 'block';
+            } else {
+                // Hide link if no URL available
+                if (linkContainer) linkContainer.style.display = 'none';
+                if (linkDivider) linkDivider.style.display = 'none';
+            }
+            
             // Show the card
             card.style.display = 'block';
             const customCard = document.getElementById('customKeywordCard');
             if (customCard) customCard.style.display = 'block';
-        }
-        
-        function displayMissingEmailInputs() {
-            const validation = selectedItem.validation;
-            if (!validation || !validation.hasIssues || !validation.missingContactEmails || validation.missingContactEmails.length === 0) {
-                return; // No missing emails
-            }
-            
-            const section = document.getElementById('missingEmailsSection');
-            const inputsContainer = document.getElementById('missingEmailsInputs');
-            if (!section || !inputsContainer) return;
-            
-            // Clear previous inputs
-            inputsContainer.innerHTML = '';
-            
-            // Create input fields for each missing email
-            validation.missingContactEmails.forEach(contact => {
-                const wrapper = document.createElement('div');
-                wrapper.style.cssText = 'display: flex; align-items: center; gap: 12px;';
-                
-                const label = document.createElement('label');
-                label.style.cssText = 'min-width: 200px; color: #92400e; font-weight: 500; font-size: 0.92em;';
-                label.textContent = contact.name + ':';
-                
-                const input = document.createElement('input');
-                input.type = 'email';
-                input.placeholder = 'contact@example.com';
-                input.dataset.contactIndex = contact.index;
-                input.className = 'contact-email-input';
-                input.style.cssText = 'flex: 1; padding: 8px 12px; border: 1px solid #f59e0b; border-radius: 6px; font-size: 0.92em; max-width: 400px;';
-                input.required = true;
-                
-                wrapper.appendChild(label);
-                wrapper.appendChild(input);
-                inputsContainer.appendChild(wrapper);
-            });
-            
-            section.style.display = 'block';
-        }
-        
-        function collectMissingContactEmails() {
-            const inputs = document.querySelectorAll('.contact-email-input');
-            const emailUpdates = [];
-            let allValid = true;
-            
-            inputs.forEach(input => {
-                const email = input.value.trim();
-                if (!email || !email.includes('@')) {
-                    allValid = false;
-                    input.style.borderColor = '#dc2626';
-                } else {
-                    input.style.borderColor = '#f59e0b';
-                    emailUpdates.push({
-                        index: parseInt(input.dataset.contactIndex),
-                        email: email
-                    });
-                }
-            });
-            
-            return allValid ? emailUpdates : null;
         }
         
         async function startProgressiveGeneration(query) {
@@ -622,7 +616,7 @@
 
                 return `
                     <div class="${cardClass}" id="keyword-${index}" onclick="window.toggleKeywordSelection('keyword-${index}', ${index})" style="cursor: pointer;">
-                        <div class="keyword-source source-${sourceLabel.toLowerCase()}">${escapeHtml(sourceLabel)}</div>
+                        <div class="keyword-source source-${sourceLabel.toLowerCase()}">${sourceLabel}</div>
                         <div class="keyword-title">${escapeHtml(label)}</div>
                         ${languageIndicators}
                         ${thematicArea ? `<div class="keyword-meta">${escapeHtml(thematicArea)}</div>` : ''}
@@ -744,6 +738,7 @@
             }
 
             keyword.isExisting = true;
+            keyword.isSelected = true; // Preselect all existing keywords by default
             return keyword;
         }
 
@@ -841,24 +836,79 @@
         });
         
         // Custom keyword input handler
+        const customKeywordInput = document.getElementById('customKeywordInput');
         document.getElementById('addCustomKeywordBtn').addEventListener('click', addCustomKeywordHandler);
-        document.getElementById('customKeywordInput').addEventListener('keypress', function(e) {
+        customKeywordInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 addCustomKeywordHandler();
             }
         });
+        customKeywordInput.addEventListener('input', function(e) {
+            if (!e.target.value.trim()) {
+                resetCustomKeywordStatus();
+            }
+        });
+
+        let customKeywordStatusInterval = null;
+        let customKeywordStatusSteps = [];
+        let customKeywordStatusIndex = 0;
+
+        function buildCustomKeywordStatusSteps(includeSynonyms) {
+            if (includeSynonyms) {
+                return [
+                    'Querying TERMDAT for exact + related matches...',
+                    'Querying GEMET for synonyms and translations...',
+                    'Querying Wikidata for linked entities...',
+                    'Consolidating multilingual labels...'
+                ];
+            }
+            return [
+                'Querying TERMDAT for exact match...',
+                'Checking GEMET for multilingual labels...',
+                'Checking Wikidata for matching entities...',
+                'Consolidating results...'
+            ];
+        }
+
+        function startCustomKeywordStatusSequence(includeSynonyms) {
+            stopCustomKeywordStatusSequence();
+            customKeywordStatusSteps = buildCustomKeywordStatusSteps(includeSynonyms);
+            if (!customKeywordStatusSteps.length) {
+                return;
+            }
+            customKeywordStatusIndex = 0;
+            showCustomKeywordStatus(customKeywordStatusSteps[customKeywordStatusIndex], 'loading');
+            customKeywordStatusInterval = setInterval(() => {
+                customKeywordStatusIndex = (customKeywordStatusIndex + 1) % customKeywordStatusSteps.length;
+                showCustomKeywordStatus(customKeywordStatusSteps[customKeywordStatusIndex], 'loading');
+            }, 1500);
+        }
+
+        function stopCustomKeywordStatusSequence() {
+            if (customKeywordStatusInterval) {
+                clearInterval(customKeywordStatusInterval);
+                customKeywordStatusInterval = null;
+            }
+        }
+
+        function resetCustomKeywordStatus() {
+            stopCustomKeywordStatusSequence();
+            showCustomKeywordStatus('', 'info');
+        }
         
         async function addCustomKeywordHandler() {
             const input = document.getElementById('customKeywordInput');
             const keyword = input.value.trim();
-            const statusDiv = document.getElementById('customKeywordStatus');
+            const includeSynonymsCheckbox = document.getElementById('customIncludeSynonyms');
+            const includeSynonyms = includeSynonymsCheckbox ? includeSynonymsCheckbox.checked : false;
             
             if (!keyword) {
-                showCustomKeywordStatus('Please enter a keyword', 'error');
+                resetCustomKeywordStatus();
+                input.focus();
                 return;
             }
             
-            showCustomKeywordStatus('Searching TERMDAT, GEMET, Wikidata...', 'loading');
+            startCustomKeywordStatusSequence(includeSynonyms);
             
             try {
                 // Search for the keyword in TERMDAT, GEMET, Wikidata
@@ -868,11 +918,16 @@
                     body: JSON.stringify({ 
                         query: keyword,
                         lang: 'de',
-                        include_synonyms: false
+                        include_synonyms: includeSynonyms
                     })
                 });
                 
+                if (!response.ok) {
+                    throw new Error(`Server error (${response.status})`);
+                }
+                
                 const data = await response.json();
+                stopCustomKeywordStatusSequence();
                 
                 if (data.keywords && data.keywords.length > 0) {
                     // Add matched keywords that aren't already in our list
@@ -919,17 +974,28 @@
                 // Clear input and reset status after a delay
                 input.value = '';
                 setTimeout(() => {
-                    statusDiv.style.display = 'none';
-                }, 2000);
+                    resetCustomKeywordStatus();
+                }, 2500);
             } catch (error) {
+                stopCustomKeywordStatusSequence();
                 showCustomKeywordStatus('Error: ' + error.message, 'error');
+                setTimeout(() => {
+                    resetCustomKeywordStatus();
+                }, 3500);
             }
         }
         
         function showCustomKeywordStatus(message, type) {
             const statusDiv = document.getElementById('customKeywordStatus');
+            if (!message) {
+                statusDiv.textContent = '';
+                statusDiv.style.display = 'none';
+                return;
+            }
             statusDiv.textContent = message;
             statusDiv.style.display = 'block';
+            statusDiv.style.background = '#f0f9ff';
+            statusDiv.style.color = '#0c4a6e';
             
             // Color coding based on status type
             switch(type) {
@@ -958,6 +1024,12 @@
             document.getElementById('modalError').style.display = 'none';
         });
         
+        function collectMissingContactEmails() {
+            // No interactive inputs available yet; allow submission when contact emails exist upstream
+            // Returning an empty array keeps the backend payload consistent with previous expectations
+            return [];
+        }
+
         document.getElementById('confirmTokenBtn').addEventListener('click', async function() {
             const apiToken = document.getElementById('modalApiToken').value.trim();
             
@@ -988,7 +1060,6 @@
             try {
                 const selectedItemStr = sessionStorage.getItem('selectedI14YItem');
                 const selectedItem = selectedItemStr ? JSON.parse(selectedItemStr) : null;
-                const currentEnv = sessionStorage.getItem('i14yEnv') || 'prod';
                 
                 if (!selectedItem) {
                     throw new Error('No item selected');
@@ -1013,8 +1084,7 @@
                         description: selectedItem.description || (selectedItem.fullObject && selectedItem.fullObject.description) || {},
                         guid: selectedItem.guid || selectedItem.id,
                         id: selectedItem.id || selectedItem.guid
-                    },
-                    env: currentEnv
+                    }
                 };
 
                 const response = await fetch('/update-i14y-keywords', {
@@ -1033,7 +1103,7 @@
                     // Build I14Y link
                     const objectId = selectedItem.id || selectedItem.guid;
                     const objectType = selectedItem.objectType || 'dataset';
-                    const baseUrl = currentEnv === 'prod' ? 'https://input.i14y.admin.ch' : 'https://input-a.i14y.admin.ch';
+                    const baseUrl = 'https://input.i14y.admin.ch';
                     const i14yLink = `${baseUrl}/catalog/${objectType}s/${objectId}/description?backto=all#section-properties`;
                     
                     // Show success message

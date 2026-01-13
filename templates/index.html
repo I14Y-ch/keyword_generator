@@ -42,7 +42,7 @@
                        style="resize: vertical; min-height: 60px; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px;"></textarea>
                 <div class="search-options">
                     <label>
-                        <input type="checkbox" id="includeSynonyms" checked>
+                        <input type="checkbox" id="includeSynonyms" unchecked>
                         <span>Include synonyms, related terms, and compound word analysis</span>
                         <span id="synonymInfoBtn" class="info-icon" title="To extract synonyms, related terms, and analyze compound words, enable this option. The content may be sent to external services like OpenAI for processing.">?</span>
                     </label>
@@ -62,6 +62,15 @@
             <div id="extractedKeywordsList" style="display: flex; gap: 8px; flex-wrap: wrap;"></div>
         </div>
 
+        <div class="workflow-section" id="statusSection" style="display: none;">
+            <div id="loadingStatus" style="display:none; margin:20px 0; padding:30px 20px; background:linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border:2px solid #0ea5e9; border-radius:12px; box-shadow:0 4px 12px rgba(14, 165, 233, 0.15);">
+                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;">
+                    <div class="spinner" style="width:36px; height:36px; border-width:4px; border-color:#0ea5e9; border-top-color:transparent;"></div>
+                    <span id="statusText" style="font-weight:600; color:#0c4a6e; font-size:1.05em; text-align:center; max-width:600px; line-height:1.5;">Initializing...</span>
+                </div>
+            </div>
+        </div>
+
         <div class="workflow-section" id="resultsSection" style="display: none;">
             <div class="results-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                 <h2 class="section-title" style="margin: 0;">Generated Keywords</h2>
@@ -69,14 +78,6 @@
             </div>
             <div id="keywordGrid" class="keyword-grid"></div>
         </div>
-
-        <div id="loading" class="loading" style="display: none;">
-            <div class="spinner"></div>
-            <p>Searching for keywords...</p>
-        </div>
-
-        <!-- Status message area shows the current script phase to the user -->
-        <div id="statusMessage" class="status" style="display:none;"></div>
 
         <div id="error" class="error" style="display: none;"></div>
         </div>
@@ -136,29 +137,48 @@
     </div>
 
     <script>
-        // Helper to show brief status messages to the user about what the script is doing
-        function setStatus(message, type = 'default') {
-            const elm = document.getElementById('statusMessage');
-            if (!elm) return;
-            
-            // Clear previous type classes
-            elm.className = 'status';
-            
-            // Add specific type class for icon styling
-            if (type) {
-                elm.classList.add(type);
+        const workflowStatusWrapper = document.getElementById('statusSection');
+        const loadingStatusPanel = document.getElementById('loadingStatus');
+        const statusText = document.getElementById('statusText');
+        let statusResetTimeout = null;
+
+        function setStatus(message) {
+            if (statusResetTimeout) {
+                clearTimeout(statusResetTimeout);
+                statusResetTimeout = null;
             }
-            
-            elm.textContent = message;
-            elm.style.display = 'block';
+            if (workflowStatusWrapper) {
+                workflowStatusWrapper.style.display = 'block';
+            }
+            if (loadingStatusPanel) {
+                loadingStatusPanel.style.display = 'block';
+            }
+            if (statusText) {
+                statusText.textContent = message || 'Working...';
+            }
         }
 
-        function clearStatus() {
-            const elm = document.getElementById('statusMessage');
-            if (!elm) return;
-            elm.textContent = '';
-            elm.style.display = 'none';
-            elm.className = 'status';  // Reset classes
+        function clearStatus(delay = 0) {
+            if (statusResetTimeout) {
+                clearTimeout(statusResetTimeout);
+                statusResetTimeout = null;
+            }
+            const hide = () => {
+                if (loadingStatusPanel) {
+                    loadingStatusPanel.style.display = 'none';
+                }
+                if (workflowStatusWrapper) {
+                    workflowStatusWrapper.style.display = 'none';
+                }
+                if (statusText) {
+                    statusText.textContent = '';
+                }
+            };
+            if (delay > 0) {
+                statusResetTimeout = setTimeout(hide, delay);
+            } else {
+                hide();
+            }
         }
 
         const searchInput = document.getElementById('searchInput');
@@ -167,7 +187,6 @@
         const connectI14YBtn = document.getElementById('connectI14YBtn');
         const resultsSection = document.getElementById('resultsSection');
         const keywordGrid = document.getElementById('keywordGrid');
-        const loading = document.getElementById('loading');
         const error = document.getElementById('error');
         const resultsCount = document.getElementById('resultsCount');
         const searchHistorySection = document.getElementById('searchHistorySection');
@@ -252,13 +271,20 @@
                 return;
             }
 
+            const includeSynonyms = document.getElementById('includeSynonyms').checked;
+
+            if (statusResetTimeout) {
+                clearTimeout(statusResetTimeout);
+                statusResetTimeout = null;
+            }
+
             hideError();
-            showLoading();
-            setStatus('Preparing search...', 'default');
+            searchBtn.disabled = true;
             hideResults();
+            clearStatus();
+            setStatus('Preparing search...');
 
             try {
-                const includeSynonyms = document.getElementById('includeSynonyms').checked;
                 const wordCount = query.split(/\s+/).filter(w => w.length > 0).length;
                 
                 // Determine workflow based on word count and synonyms setting
@@ -266,20 +292,20 @@
                 
                 if (useDirectSearch && !includeSynonyms) {
                     // Direct search: Query TERMDAT, GEMET, Wikidata with entered words
-                    setStatus(`Searching vocabularies with ${wordCount} keyword(s)...`, 'default');
+                    setStatus(`Searching vocabularies with ${wordCount} keyword(s)...`);
                 } else if (useDirectSearch && includeSynonyms) {
                     // Use NLP/AI to extract/expand keywords, then search
-                    setStatus('Extracting keywords and finding synonyms...', 'synonyms');
+                    setStatus('Extracting keywords and finding synonyms...');
                 } else if (!useDirectSearch && includeSynonyms) {
                     // Long text: extract keywords with NLP/AI, then search
-                    setStatus('Analyzing text to extract keywords...', 'synonyms');
+                    setStatus('Analyzing text to extract keywords...');
                 } else {
                     // Long text without synonyms: extract keywords, then direct search
-                    setStatus('Extracting keywords from text...', 'default');
+                    setStatus('Extracting keywords from text...');
                 }
 
                 // Next stage: querying backend services
-                setStatus('Querying TERMDAT, GEMET, and Wikidata...', 'termdat');
+                setStatus('Querying TERMDAT, GEMET, and Wikidata...');
                 
                 // Use streaming API for progressive results
                 const useStreaming = true;
@@ -310,7 +336,7 @@
 
                     try {
                         const data = await response.json();
-                        setStatus('Rendering results...', 'rendering');
+                        setStatus('Rendering results...');
                         displayResults(data);
                         updateSearchHistory(query);
                     } catch (jsonError) {
@@ -322,10 +348,11 @@
             } catch (err) {
                 console.error('Search error:', err);
                 showError(err.message || 'Search failed. Please try again.');
+                setStatus(err.message || 'Search failed. Please try again.');
             } finally {
-                hideLoading();
+                searchBtn.disabled = false;
                 // Clear the status after a short delay so users can see the final state
-                setTimeout(() => clearStatus(), 1200);
+                clearStatus(1200);
             }
         }
         
@@ -382,7 +409,7 @@
                                     }
 
                                     if (data.type === 'status') {
-                                        setStatus(data.message || 'Working...', data.stage || 'default');
+                                        setStatus(data.message || 'Working...');
                                         continue;
                                     }
 
@@ -403,13 +430,13 @@
                                     displayResults(payload);
 
                                     if (firstKeywordBatch && aggregated.length > 0) {
-                                        setStatus('Showing first matches...', 'success');
+                                        setStatus('Showing first matches...');
                                         showResults();
                                         firstKeywordBatch = false;
                                     }
 
                                     if (data.is_final) {
-                                        setStatus('Keyword discovery complete', 'success');
+                                        setStatus('Keyword discovery complete');
                                     }
                                 } catch (e) {
                                     console.error('Error parsing SSE data:', e, 'Line:', line);
@@ -611,16 +638,6 @@
             showResults();
         }
 
-        function showLoading() {
-            loading.style.display = 'block';
-            searchBtn.disabled = true;
-        }
- 
-        function hideLoading() {
-            loading.style.display = 'none';
-            searchBtn.disabled = false;
-        }
- 
         function showResults() {
             resultsSection.style.display = 'block';
         }

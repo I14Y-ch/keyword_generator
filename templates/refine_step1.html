@@ -42,14 +42,6 @@
                     <input type="text" id="i14ySearchInput" class="search-input" 
                     placeholder="Search I14Y (e.g., 'Seilbahn', 'Energie', 'Verkehr')..." 
                     style="flex: 1; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px;" />
-                    <div class="env-toggle-container" title="Choose between the pre-production environment Abnahme (ABN) or the productive environment (PROD)">
-                        <span class="env-label" id="envLabelLeft">ABN</span>
-                        <label class="env-toggle">
-                            <input type="checkbox" id="envToggle">
-                            <span class="env-slider"></span>
-                        </label>
-                        <span class="env-label" id="envLabelRight">PROD</span>
-                    </div>
                     <button id="i14ySearchBtn" class="search-btn" style="padding: 12px 30px;">Search</button>
                 </div>
                 
@@ -105,25 +97,9 @@
 
     <script>
         let cachedSearchResults = [];
-        let currentEnv = 'prod';
         let organisations = [];
 
-        // Initialize environment toggle from previous choice
         window.addEventListener('DOMContentLoaded', function() {
-            const savedEnv = sessionStorage.getItem('i14yEnv');
-            if (savedEnv === 'prod' || savedEnv === 'abnahme') {
-                currentEnv = savedEnv;
-            }
-            document.getElementById('envToggle').checked = (currentEnv === 'prod');
-            
-            // Load organisations
-            loadOrganisations();
-        });
-
-        document.getElementById('envToggle').addEventListener('change', function(e) {
-            currentEnv = e.target.checked ? 'prod' : 'abnahme';
-            sessionStorage.setItem('i14yEnv', currentEnv);
-            // Reload organisations when environment changes
             loadOrganisations();
         });
         
@@ -138,7 +114,7 @@
                 const response = await fetch('/get-i14y-organisations', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ env: currentEnv })
+                    body: JSON.stringify({})
                 });
                 
                 const data = await response.json();
@@ -222,7 +198,6 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         query: searchQuery, 
-                        env: currentEnv,
                         objectType: objectType,
                         organisation: organisation
                     })
@@ -233,6 +208,9 @@
                 if (data.datasets && data.datasets.length > 0) {
                     cachedSearchResults = data.datasets;
                     applyFiltersAndDisplay();
+                    
+                    // Fetch lock status for all concepts in the background
+                    fetchLockedStatusForConcepts(cachedSearchResults);
                 } else {
                     document.getElementById('searchStatus').textContent = 'No items found';
                     document.getElementById('i14yResults').style.display = 'none';
@@ -348,8 +326,7 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             objectId,
-                            objectType,
-                            env: currentEnv
+                            objectType
                         })
                     });
 
@@ -358,10 +335,23 @@
                         if (data && typeof data === 'object') {
                             if (data.fullObject) {
                                 item.fullObject = data.fullObject;
+                                // Extract isLocked status from the full object if available
+                                if (data.fullObject.isLocked !== undefined) {
+                                    item.isLocked = data.fullObject.isLocked;
+                                }
+                            }
+                            // Also check the direct isLocked field in the response
+                            if (data.isLocked !== undefined) {
+                                item.isLocked = data.isLocked;
                             }
                             if (data.validation) {
                                 item.validation = data.validation;
                             }
+                            console.log('[DEBUG selectItem] Item after loading full object:', {
+                                objectType: item.objectType,
+                                isLocked: item.isLocked,
+                                hasFullObject: !!data.fullObject
+                            });
                         }
                     } else {
                         console.warn('Failed to load full I14Y object:', response.status);
@@ -379,10 +369,36 @@
             sessionStorage.setItem('selectedI14YItem', JSON.stringify(item));
             const description = item.description || item.title || '';
             sessionStorage.setItem('keywordQuery', description);
-            if (currentEnv) {
-                sessionStorage.setItem('i14yEnv', currentEnv);
-            }
             window.location.href = '/refine/step2';
+        }
+        
+        async function fetchLockedStatusForConcepts(results) {
+            // Fetch the locked status for all concepts in the search results
+            const concepts = results.filter(item => item.objectType === 'concept');
+            
+            for (const concept of concepts) {
+                try {
+                    const response = await fetch('/get-i14y-object', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            objectId: concept.guid || concept.id,
+                            objectType: 'concept'
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.isLocked !== undefined) {
+                            concept.isLocked = data.isLocked;
+                        }
+                        // Refresh the display with updated lock status
+                        applyFiltersAndDisplay();
+                    }
+                } catch (error) {
+                    console.debug(`Could not fetch lock status for concept ${concept.id}:`, error);
+                }
+            }
         }
         
         function displaySearchResults(results) {
@@ -395,13 +411,25 @@
                 
                 const resultCard = document.createElement('div');
                 resultCard.className = 'keyword-card existing-keyword-card';
+                
+                // Create lock indicator for locked concepts
+                const lockIndicator = (result.objectType === 'concept' && result.isLocked) 
+                    ? '<span style="font-size: 1.1em; margin-left: 8px;" title="This concept is locked">🔒</span>' 
+                    : '';
+                
+                // Create a locked tag for better visibility
+                const lockedTag = (result.objectType === 'concept' && result.isLocked)
+                    ? `<span class="lang-tag" style="background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; display:flex; align-items:center; gap:4px;">🔒 Locked</span>`
+                    : '';
+                
                 resultCard.innerHTML = `
                     <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                         <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
-                            <div class="keyword-title">${escapeHtml(result.title)}</div>
+                            <div class="keyword-title">${escapeHtml(result.title)}${lockIndicator}</div>
                             ${result.description ? `<div class="keyword-description">${escapeHtml(result.description.substring(0, 160))}${result.description.length > 160 ? '...' : ''}</div>` : ''}
                             <div style="display:flex; flex-wrap:wrap; gap:6px;">
                                 <span class="lang-tag" style="background:#e8f4fd; color:#1e3a8a; border:1px solid #cfe4ff;">${escapeHtml(result.objectType || 'dataset')}</span>
+                                ${lockedTag}
                                 ${result.status && result.status.trim() ? `<span class="lang-tag" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a;">${escapeHtml(result.status)}</span>` : ''}
                                 ${result.publicationLevel && result.publicationLevel.trim() ? `<span class="lang-tag" style="background:#d1fae5; color:#065f46; border:1px solid #a7f3d0;">${escapeHtml(result.publicationLevel)}</span>` : ''}
                                 ${result.publisher && result.publisher.trim() ? `<span class="lang-tag" style="background:#f0f9ff; color:#0369a1; border:1px solid #bae6fd;">${escapeHtml(typeof result.publisher === 'string' ? result.publisher : (result.publisher.name || result.publisher.title || 'Unknown'))}</span>` : ''}

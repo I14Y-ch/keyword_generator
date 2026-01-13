@@ -13,7 +13,7 @@ A Flask web application that generates DCAT-AP CH compliant keywords by searchin
 - **Modern web interface** with responsive design
 - **Real-time search** with loading indicators
 - **Structured results** showing source, URI, and descriptions
-- **Select and download keywords**: Click on generated keyword tiles to select them and download the selected keywords in JSON format.
+- **Select and download keywords**: Click on generated keyword tiles to select them and download the selected keywords in JSON format or upload them to an entry on I14Y.
 
 ## Setup
 
@@ -28,6 +28,16 @@ A Flask web application that generates DCAT-AP CH compliant keywords by searchin
    ```
 
 3. Open your browser and go to `http://localhost:5000`
+
+## Hunspell Dictionaries
+
+Compound keyword splitting relies on Hunspell lexicons. On DigitalOcean App Platform the `deploy.sh` script automatically installs `hunspell` plus the `hunspell-de-CH`, `hunspell-fr`, `hunspell-it`, and `hunspell-en-gb` packages so continuous deployment keeps working. For local development run:
+
+```bash
+sudo apt-get update && sudo apt-get install hunspell hunspell-de-ch hunspell-fr hunspell-it hunspell-en-gb
+```
+
+You can override the dictionary picked at runtime by setting `HUNSPELL_DIC_PATH` (absolute path to a `.dic` file) or `HUNSPELL_LOCALE` (e.g., `de_CH`). If no system dictionary is found the app falls back to the bundled vocabulary.
 
 ## Usage
 

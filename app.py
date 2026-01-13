@@ -5,13 +5,15 @@ import json
 import logging
 import os
 import re
-import subprocess
-import sys
 from html import unescape
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
+
+try:
+    from nltk.stem.snowball import GermanStemmer
+except ImportError:
+    GermanStemmer = None
 
 # Load environment variables from .env file
 try:
@@ -23,6 +25,67 @@ except ImportError:
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+
+# Constants
+APP_NAME = "I14Y-keyword-generator"
+APP_VERSION = "1.0"
+DEFAULT_CONTACT = "i14y@bfs.admin.ch"
+SUPPORTED_LANGUAGES = {'de', 'fr', 'it', 'en'}
+MAX_KEYWORDS_DEFAULT = 10
+MAX_KEYWORDS_SWISS = 20
+MAX_KEYWORDS_AI = 6
+MAX_KEYWORDS_HEURISTIC = 5
+MAX_SYNONYMS_DEFAULT = 5
+
+# Timeout constants (in seconds)
+TIMEOUT_SHORT = 5
+TIMEOUT_MEDIUM = 8
+TIMEOUT_DEFAULT = 10
+TIMEOUT_OPENAI = 15
+
+# Cache timeout constants (in seconds)
+CACHE_TIMEOUT_SHORT = 300  # 5 minutes
+CACHE_TIMEOUT_DEFAULT = 3600  # 1 hour
+CACHE_TIMEOUT_LONG = 24 * 3600  # 24 hours
+
+# API endpoints
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+TERMDAT_SEARCH_URL = "https://www.termdat.bk.admin.ch/api/Search/Search"
+GEMET_CONCEPTS_URL = "https://www.eionet.europa.eu/gemet/getConceptsMatchingKeyword"
+GEMET_CONCEPT_URL = "https://www.eionet.europa.eu/gemet/getConcept"
+GEMET_TRANSLATIONS_URL = "https://www.eionet.europa.eu/gemet/getAllTranslationsForConcept"
+
+COMPOUND_CONNECTORS = ('s', 'es', 'en', 'er', 'e', 'n')
+GERMAN_COMPOUND_SUFFIXES = (
+    'ung', 'werk', 'heit', 'keit', 'tion', 'tät', 'amt', 'wesen', 'kraft', 'fahrt', 'netz',
+    'schutz', 'dienst', 'system', 'planung', 'verkehr', 'recht', 'gesetz', 'pflege',
+    'versorgung', 'zentrum', 'bereich', 'gebiet', 'service', 'daten', 'arbeit', 'nahme',
+    'hilfe', 'projekt', 'programm', 'register', 'plattform',
+    'ist', 'istin', 'isten', 'istinnen'
+)
+
+GERMAN_COMPOUND_VOCAB = {
+    'arbeit', 'arbeits', 'amt', 'analyse', 'antrag', 'archiv', 'atlas', 'bahn', 'bau',
+    'bereich', 'betrieb', 'bilanz', 'bildung', 'boden', 'bund', 'daten', 'datensatz',
+    'datenbank', 'datenschutz', 'dienst', 'dienstleistung', 'digital', 'dokument',
+    'energie', 'entsorgung', 'entwicklung', 'fahrt', 'fahrzeug', 'finanz', 'forschung',
+    'markt', 'zeit', 'struktur',
+    'gemeinde', 'gesundheit', 'gesetz', 'gebiet', 'geodaten', 'gesellschaft',
+    'gewaesser', 'hilfe', 'information', 'infrastruktur', 'innovation', 'karte', 'kataster',
+    'klima', 'kommunikation', 'kraft', 'kraftwerk', 'land', 'landwirtschaft', 'leitung',
+    'logistik', 'luft', 'mobilitaet', 'netz', 'netzwerk', 'planung', 'plattform', 'portal',
+    'prozess', 'programm', 'projekt', 'register', 'region', 'ressource', 'sicherheit',
+    'sozial', 'stadt', 'statistik', 'steuer', 'strom', 'studie', 'system', 'technik',
+    'telekommunikation', 'transport', 'umwelt', 'verkehr', 'versorgung', 'verwaltung',
+    'wasser', 'weg', 'werk', 'wirtschaft', 'wissen', 'zentrum', 'zug', 'strasse',
+    'strassen', 'strassebau', 'strassenbau', 'datenplattform', 'datendienst', 'datennetz',
+    'energienetz', 'energiesystem', 'verkehrsnetz', 'verkehrssystem', 'verkehrsweg',
+    'wasserwirtschaft', 'umweltamt', 'verkehrsplanung',
+    'schiene', 'schienen', 'einzug', 'beamter', 'beamte', 'beamten'
+}
+
+# Network environment configuration
+NETWORK_ENV = "external"
 
 app = Flask(__name__)
 
@@ -37,67 +100,135 @@ if os.environ.get('FLASK_ENV') == 'production':
 
 # Configure caching
 app.config['CACHE_TYPE'] = 'SimpleCache'
-app.config['CACHE_DEFAULT_TIMEOUT'] = 300
+app.config['CACHE_DEFAULT_TIMEOUT'] = CACHE_TIMEOUT_SHORT
 cache = Cache(app)
 
-# Create a global HTTP session for API requests with proper headers
-http_session = requests.Session()
-contact = os.environ.get('ADMIN_CONTACT', 'devteam@example.com')
-user_agent = f"I14Y-keyword-generator/1.0 (mailto:{contact})"
-http_session.headers.update({
-    'User-Agent': user_agent,
-    'Accept': 'application/json',
-    'From': contact
-})
+def create_http_session(contact_email=None, user_agent_suffix=""):
+    """Create a configured HTTP session with retries and proper headers."""
+    session = requests.Session()
+    contact = contact_email or os.environ.get('ADMIN_CONTACT', DEFAULT_CONTACT)
+    user_agent = f"{APP_NAME}/{APP_VERSION}{user_agent_suffix} (mailto:{contact})"
+    session.headers.update({
+        'User-Agent': user_agent,
+        'Accept': 'application/json',
+        'From': contact
+    })
+    
+    # Configure retries
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 502, 503, 504], allowed_methods=["GET", "POST"])
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    
+    return session
 
-# Configure retries
-retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 502, 503, 504], allowed_methods=["GET", "POST"])
-adapter = HTTPAdapter(max_retries=retries)
-http_session.mount('https://', adapter)
-http_session.mount('http://', adapter)
-
-# Network environment configuration
-NETWORK_ENV = "external"  # Change to "external" for external networks
+# Create a global HTTP session for I14Y API requests
+http_session = create_http_session()
 
 class KeywordGenerator:
     def __init__(self):
-        self.termdat_base_url = "https://register.ld.admin.ch/termdat/"
+        self.termdat_base_url = "https://www.termdat.bk.admin.ch/search/entry/"
         self.gemet_base_url = "http://www.eionet.europa.eu/gemet/"
         self.wikidata_base_url = "https://www.wikidata.org/w/api.php"
         # Set SSL verification based on network environment
         self.verify_ssl = NETWORK_ENV != "internal"
 
-        # Create a persistent session for outgoing HTTP requests to improve connection reuse
-        # and set a descriptive User-Agent so Wikidata operators can contact us if needed.
-        self.session = requests.Session()
-        contact = os.environ.get('ADMIN_CONTACT', 'devteam@example.com')
-        ua = f"keyword-generator/1.0 (mailto:{contact})"
-        # Set headers used for Wikidata requests (also helpful for other endpoints)
-        self.session.headers.update({'User-Agent': ua, 'From': contact})
+        # Create a persistent session for external vocabulary API requests
+        self.session = create_http_session(user_agent_suffix="")
 
-        # Configure retries with exponential backoff for transient errors and 429 throttling
-        retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 502, 503, 504], allowed_methods=["GET", "POST"])
-        adapter = HTTPAdapter(max_retries=retries)
-        self.session.mount('https://', adapter)
-        self.session.mount('http://', adapter)
+        # Circuit breaker for external endpoints - track consecutive failures
+        self.endpoint_failures = {
+            'termdat': 0,
+            'gemet': 0,
+            'wikidata': 0
+        }
+        self.endpoint_disabled = {
+            'termdat': False,
+            'gemet': False,
+            'wikidata': False
+        }
+        self.max_endpoint_failures = 3
 
-        # Optional spaCy model for embeddings/NLP; fall back to None if unavailable
-        self.nlp = None
-        try:
-            import spacy
+        # Lightweight German stemmer for compound analysis (optional dependency)
+        self.stemmer = None
+        if GermanStemmer is not None:
             try:
-                self.nlp = spacy.load('de_core_news_sm')
-            except Exception:
-                # If the German model is missing, try a blank pipeline as a lightweight fallback
-                self.nlp = spacy.blank('de')
-        except Exception:
-            # Keep self.nlp as None so downstream code uses regex/LLM fallbacks
-            self.nlp = None
+                self.stemmer = GermanStemmer()
+            except Exception as stem_err:
+                logging.warning(f"Failed to initialize GermanStemmer: {stem_err}")
+                self.stemmer = None
+        else:
+            logging.info("nltk not installed - compound splitting will use heuristic rules only")
+
+        hunspell_vocab = self._load_hunspell_vocab()
+        if hunspell_vocab:
+            self.compound_vocab = hunspell_vocab
+        else:
+            self.compound_vocab = GERMAN_COMPOUND_VOCAB
         
         # OpenAI API key for keyword extraction (required for AI-based generation)
         self.openai_api_key = os.environ.get('OPENAI_API_KEY')
         if not self.openai_api_key:
             logging.warning("OPENAI_API_KEY not set - AI-based keyword generation will be unavailable")
+
+    def _load_hunspell_vocab(self):
+        """Load a German vocabulary from Hunspell dictionary files if available."""
+        env_dic = os.environ.get('HUNSPELL_DIC_PATH')
+        candidates = []
+        if env_dic:
+            candidates.append(env_dic)
+
+        locale = os.environ.get('HUNSPELL_LOCALE', 'de_CH')
+        locale_variants = [locale, 'de_CH', 'de_DE', 'de_AT', 'de']
+        seen = set()
+        for variant in locale_variants:
+            if not variant or variant in seen:
+                continue
+            seen.add(variant)
+            candidates.append(f"/usr/share/hunspell/{variant}.dic")
+            candidates.append(f"/usr/share/myspell/{variant}.dic")
+
+        for dic_path in candidates:
+            if not dic_path or not os.path.exists(dic_path):
+                continue
+            try:
+                vocab = self._parse_hunspell_dic(dic_path)
+                if vocab:
+                    logging.info(f"Loaded {len(vocab)} Hunspell entries from {dic_path}")
+                    return vocab
+            except Exception as hun_err:
+                logging.debug(f"Failed to load Hunspell dictionary '{dic_path}': {hun_err}")
+                continue
+
+        logging.info("No Hunspell dictionary found - falling back to built-in compound vocabulary")
+        return set()
+
+    def _parse_hunspell_dic(self, dic_path):
+        """Parse a Hunspell .dic file and return the lowercase vocabulary set."""
+        vocab = set()
+        with open(dic_path, 'r', encoding='utf-8') as dic_file:
+            lines = dic_file.readlines()
+        if not lines:
+            return vocab
+
+        entries = lines
+        first_line = lines[0].strip()
+        if first_line.isdigit():
+            entries = lines[1:]
+
+        for entry in entries:
+            token = entry.strip()
+            if not token or token.startswith('#'):
+                continue
+            base = token.split('/')[0].strip()
+            if not base:
+                continue
+            cleaned = re.sub(r'[^A-Za-zÄÖÜäöüß-]', '', base)
+            lower = cleaned.lower()
+            if lower:
+                vocab.add(lower)
+                vocab.add(self._normalize_german_token(lower))
+        return vocab
 
     def _detect_language(self, text):
         """Detect the language of the input text using langdetect.
@@ -121,7 +252,47 @@ class KeywordGenerator:
             logging.debug(f"Language detection failed: {e}")
             return 'de'
 
-    def _generate_keywords_with_ai(self, text, max_keywords=8, language='de', publisher=None, themes=None):
+    def _infer_keyword_language(self, text, fallback=None):
+        """Infer the most likely language (de, en, fr, it) for a single keyword."""
+        supported = SUPPORTED_LANGUAGES
+        if fallback and fallback.lower() in supported:
+            return fallback.lower()
+
+        if not text:
+            return fallback.lower() if fallback and fallback.lower() in supported else 'de'
+
+        cleaned = str(text).strip()
+        if not cleaned:
+            return fallback.lower() if fallback and fallback.lower() in supported else 'de'
+
+        lower = cleaned.lower()
+
+        special_chars = {
+            'de': {'ä', 'ö', 'ü', 'ß'},
+            'fr': {'à', 'â', 'ç', 'é', 'è', 'ê', 'ë', 'î', 'ï', 'ô', 'œ', 'ù', 'û'},
+            'it': {'à', 'è', 'é', 'ì', 'ò', 'ù'}
+        }
+
+        for lang, chars in special_chars.items():
+            if any(ch in lower for ch in chars):
+                return lang
+
+        # Use language detection for longer inputs
+        if len(cleaned) >= 6 or ' ' in cleaned:
+            detected = self._detect_language(cleaned)
+            if detected in supported:
+                return detected
+
+        if fallback and fallback.lower() in supported:
+            return fallback.lower()
+
+        ascii_only = re.match(r'^[a-zA-Z0-9\-\s]+$', cleaned) is not None
+        if ascii_only and not any(ch in lower for ch in special_chars['de']):
+            return 'en'
+
+        return 'de'
+
+    def _generate_keywords_with_ai(self, text, max_keywords=MAX_KEYWORDS_DEFAULT, language='de', publisher=None, themes=None):
         """Generate keywords using OpenAI API with context.
         
         Args:
@@ -225,30 +396,56 @@ JSON array:"""
             logging.error(f"OpenAI keyword generation failed: {e}", exc_info=True)
             return []
 
-    def _extract_keywords_openai(self, text, max_keywords=8, language='de'):
-        """Legacy method for extracting keywords using OpenAI - redirects to _generate_keywords_with_ai.
-        
-        Args:
-            text (str): Input text
-            max_keywords (int): Maximum number of keywords
-            language (str): Language code
-            
-        Returns:
-            list: Extracted keywords
-        """
-        return self._generate_keywords_with_ai(text, max_keywords=max_keywords, language=language)
-    
-    def _extract_keywords_with_openai(self, text, max_keywords=10):
-        """Legacy method for extracting keywords with OpenAI - redirects to _generate_keywords_with_ai.
-        
-        Args:
-            text (str): Input text
-            max_keywords (int): Maximum number of keywords
-            
-        Returns:
-            list: Extracted keywords
-        """
-        return self._generate_keywords_with_ai(text, max_keywords=max_keywords, language='de')
+    def _extract_keywords_openai(self, text, max_keywords=MAX_KEYWORDS_DEFAULT, language='de'):
+        """Use OpenAI to extract keywords directly from text when available."""
+        if not self.openai_api_key:
+            return []
+
+        cleaned_text = text.strip()
+        if not cleaned_text:
+            return []
+
+        try:
+            import openai
+
+            client = openai.OpenAI(api_key=self.openai_api_key)
+            lang_names = {'de': 'German', 'en': 'English', 'fr': 'French', 'it': 'Italian'}
+            lang_name = lang_names.get(language, 'German')
+
+            prompt = f"""Extract up to {max_keywords} concise {lang_name} keywords from the following text.
+
+Requirements:
+- Prefer nouns or short noun compounds (max 3 words)
+- Remove duplicates and keep the original language casing
+- Focus on topics mentioned explicitly in the text
+- Return ONLY a JSON array of strings, no explanations
+
+Text:
+{cleaned_text}
+
+JSON array:"""
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=200
+            )
+
+            raw_content = response.choices[0].message.content.strip()
+            fenced_match = re.match(r"```[a-zA-Z0-9]*\s*(.*?)```", raw_content, re.DOTALL)
+            payload = fenced_match.group(1).strip() if fenced_match else raw_content
+
+            parsed = json.loads(payload)
+            if isinstance(parsed, list):
+                keywords = [str(item).strip() for item in parsed if str(item).strip()]
+                return keywords[:max_keywords]
+            logging.debug("Unexpected OpenAI keyword payload format")
+            return []
+
+        except Exception as exc:
+            logging.error(f"OpenAI keyword extraction failed: {exc}", exc_info=True)
+            return []
 
     def _extract_nouns_simple(self, text, max_nouns=10):
         """Extract potential nouns using capitalization heuristics and frequency analysis."""
@@ -333,11 +530,11 @@ JSON array:"""
         logging.info(f"Extracted {len(result)} most frequent nouns: {result}")
         return result
 
-    def _extract_keywords_from_text(self, text, max_keywords=5, nouns_only=False):
+    def _extract_keywords_from_text(self, text, max_keywords=MAX_KEYWORDS_HEURISTIC, nouns_only=False):
         """Extract representative keywords from free-form text.
-        
-        Tries OpenAI first (if API key available), then falls back to spaCy (if available),
-        then uses regex heuristics as final fallback.
+
+        Tries OpenAI first (if API key available), then falls back to lightweight
+        heuristics (capitalization, frequency, compound detection, regex patterns).
 
         Args:
             text (str): Input text to analyze
@@ -361,7 +558,7 @@ JSON array:"""
                 logging.info(f"Extracted {len(openai_keywords)} keywords using OpenAI")
                 return openai_keywords
         
-        # Fall back to spaCy + regex method
+        # Fall back to heuristic method
 
         stopwords = {
             'der', 'die', 'das', 'und', 'oder', 'sowie', 'mit', 'auf', 'für', 'von', 'den', 'im', 'in', 'am',
@@ -373,30 +570,9 @@ JSON array:"""
 
         keywords = []
         candidate_phrases = []
-        noun_pos_tags = {'NOUN', 'PROPN'}
 
-        # Use spaCy when available for noun chunks and named entities
-        if self.nlp:
-            try:
-                doc = self.nlp(text)
-                if not nouns_only:
-                    for chunk in doc.noun_chunks:
-                        chunk_text = chunk.text.strip()
-                        if len(chunk_text.split()) <= 5 and len(chunk_text) > 2:
-                            candidate_phrases.append(chunk_text)
-
-                    for ent in doc.ents:
-                        ent_text = ent.text.strip()
-                        if len(ent_text) > 2:
-                            candidate_phrases.append(ent_text)
-
-                for token in doc:
-                    if token.pos_ in noun_pos_tags and not token.is_stop:
-                        token_text = token.text.strip()
-                        if len(token_text) > 2 and token_text.isalpha():
-                            keywords.append(token_text)
-            except Exception as e:
-                logging.debug(f"spaCy keyword extraction failed, falling back to regex heuristics: {e}")
+        heuristic_nouns = self._extract_nouns_simple(text, max_keywords * 2)
+        keywords.extend(heuristic_nouns)
 
         # Regex fallback for phrases (capitalized spans or quoted phrases)
         phrases = []
@@ -415,7 +591,7 @@ JSON array:"""
         for phrase in phrases:
             words = phrase.lower().split()
             if nouns_only:
-                # Only keep single nouns in fallback mode when spaCy unavailable
+                # Only keep single nouns when running in heuristic mode
                 if len(words) == 1 and words[0] not in stopwords:
                     filtered_phrases.append(phrase.strip())
             else:
@@ -433,7 +609,7 @@ JSON array:"""
                     keywords.append(phrase)
 
         # Token-based fallback if we still have few candidates
-        if len(keywords) + len(candidate_phrases) < max_keywords and not self.nlp:
+        if len(keywords) + len(candidate_phrases) < max_keywords:
             tokens = re.findall(r'[A-Za-zÄÖÜäöüß-]{3,}', text)
             for token in tokens:
                 lower = token.lower()
@@ -469,71 +645,191 @@ JSON array:"""
 
         return unique
 
-    def _split_compound_words(self, word):
-        """Split compound words using OpenAI API (supports DE/FR/IT/EN)."""
-        if len(word) < 8:
+    def _split_compound_words(self, word, _depth=0):
+        """Split compound words using lightweight heuristics and optional stemming."""
+        if not word:
+            return []
+
+        cleaned = re.sub(r'[^A-Za-zÄÖÜäöüß\-\s]', '', word).strip()
+        if not cleaned:
             return [word]
-        
-        try:
-            import openai
-            
-            # Create OpenAI client
-            client = openai.OpenAI(api_key=self.openai_api_key)
-            
-            # Use OpenAI to split compound words intelligently
-            prompt = f"""Split this compound word into its meaningful component parts. Return ONLY the parts as a JSON array, nothing else.
 
-Word: {word}
+        hyphen_parts = [part for part in re.split(r'[\s-]+', cleaned) if part]
+        if len(hyphen_parts) > 1:
+            return [self._capitalize_preserve(part) for part in hyphen_parts]
 
-Rules:
-- Only split if the word is clearly a compound (like German compounds)
-- Split into 2-3 meaningful parts maximum
-- Each part should be a complete, recognizable word
-- Remove connecting elements (like 's', 'es', 'en' in German)
-- Capitalize each part (for nouns)
-- If uncertain or the word is not a compound, return it as-is in a single-element array
+        if len(cleaned) < 5 or _depth >= 3:
+            return [self._capitalize_preserve(cleaned)]
 
-Examples:
-"Energieversorgung" -> ["Energie", "Versorgung"]
-"Wasserkraftwerk" -> ["Wasser", "Kraftwerk"]
-"Administration" -> ["Administration"]
-"Infrastructure" -> ["Infrastructure"]
+        best_split = self._find_best_compound_split(cleaned)
+        if not best_split and len(cleaned) >= 8:
+            greedy_parts = self._greedy_vocab_split(cleaned)
+            if greedy_parts:
+                return greedy_parts
+        if not best_split:
+            return [self._capitalize_preserve(cleaned)]
 
-Return only a JSON array of strings, no explanation."""
+        left_part, right_part = best_split
+        left_components = self._split_compound_words(left_part, _depth + 1)
+        right_components = self._split_compound_words(right_part, _depth + 1)
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=50
-            )
-            
-            result_text = response.choices[0].message.content.strip()
-            
-            # Strip markdown code fences if present
-            if result_text.startswith('```'):
-                lines = result_text.split('\n')
-                result_text = '\n'.join(lines[1:-1]) if len(lines) > 2 else result_text
-            
-            # Parse JSON response
-            parts = json.loads(result_text)
-            
-            # Validate: should be a list of strings
-            if isinstance(parts, list) and len(parts) > 0 and all(isinstance(p, str) for p in parts):
-                # If only one part returned, return original word
-                if len(parts) == 1:
-                    return [word]
-                logging.info(f"Split '{word}' -> {parts}")
-                return parts
-            else:
-                logging.warning(f"Invalid split result for '{word}': {parts}")
-                return [word]
-                
-        except Exception as e:
-            logging.debug(f"Failed to split '{word}': {e}")
-            return [word]
+        combined = left_components + right_components
+        ordered = []
+        for part in combined:
+            normalized = self._capitalize_preserve(part)
+            if normalized and normalized not in ordered:
+                ordered.append(normalized)
+        return ordered if ordered else [self._capitalize_preserve(cleaned)]
+
+    def _find_best_compound_split(self, token):
+        """Find the best split point for a potential compound token."""
+        best_split = None
+        best_score = 0.0
+        length = len(token)
+        for idx in range(3, length - 2):
+            left = token[:idx]
+            right = token[idx:]
+            for left_var, right_var, penalty in self._compound_split_variants(left, right):
+                left_score = self._component_score(left_var)
+                right_score = self._component_score(right_var)
+                if left_score >= 1.0 and right_score >= 1.0:
+                    score = left_score + right_score - penalty
+                    if score > best_score:
+                        best_score = score
+                        best_split = (left_var, right_var)
+        return best_split
+
+    def _compound_split_variants(self, left, right):
+        variants = [(left, right, 0.0)]
+        right_lower = right.lower()
+        left_lower = left.lower()
+
+        for connector in COMPOUND_CONNECTORS:
+            if right_lower.startswith(connector) and len(right) - len(connector) >= 3:
+                variants.append((left, right[len(connector):], 0.15))
+            if left_lower.endswith(connector) and len(left) - len(connector) >= 3:
+                variants.append((left[:-len(connector)], right, 0.15))
+
+        return variants
+
+    def _greedy_vocab_split(self, token):
+        """Greedy fallback that peels off known vocab segments from left to right."""
+        token = token.strip()
+        if not token:
+            return []
+
+        token_lower = token.lower()
+        length = len(token)
+        pos = 0
+        parts = []
+
+        while pos < length:
+            match_end = None
+            for end in range(length, pos + 2, -1):
+                if pos == 0 and not parts and end == length:
+                    continue
+                segment = token_lower[pos:end]
+                if segment in self.compound_vocab:
+                    match_end = end
+                    break
+
+            if match_end:
+                parts.append(self._capitalize_preserve(token[pos:match_end]))
+                pos = match_end
+                continue
+
+            skipped = False
+            if parts:
+                for connector in COMPOUND_CONNECTORS:
+                    conn_len = len(connector)
+                    if token_lower.startswith(connector, pos) and (length - (pos + conn_len)) >= 3:
+                        pos += conn_len
+                        skipped = True
+                        break
+
+            if not skipped:
+                return []
+
+        return parts if len(parts) > 1 else []
+
+    def _component_score(self, part):
+        if not part or len(part) < 3:
+            return 0.0
+
+        lower = part.lower()
+        normalized = self._normalize_german_token(lower)
+        score = 0.0
+
+        if lower in self.compound_vocab:
+            score += 2.0
+        if normalized in self.compound_vocab:
+            score += 2.0
+
+        # Capitalized segments are likely standalone nouns in German compounds
+        if part[0].isupper():
+            score += 0.5
+
+        # Handle feminine occupational suffixes (e.g., Fahrerin, Polizistin, Lehrerinnen)
+        gender_suffixes = ['innen', 'erin', 'lerin', 'nerin', 'in']
+        if len(lower) >= 5:
+            for suffix in gender_suffixes:
+                if lower.endswith(suffix) and len(lower) - len(suffix) >= 3:
+                    base = lower[:-len(suffix)]
+                    base_candidates = {base, base + 'e', base + 'er', base + 'en'}
+                    found = False
+                    for candidate in base_candidates:
+                        cand_norm = self._normalize_german_token(candidate)
+                        if candidate in self.compound_vocab or cand_norm in self.compound_vocab:
+                            score += 1.2
+                            found = True
+                            break
+                    if not found and len(base) >= 6:
+                        for idx in range(3, len(base) - 2):
+                            left = base[:idx]
+                            right = base[idx:]
+                            if left in self.compound_vocab and right in self.compound_vocab:
+                                score += 0.8
+                                found = True
+                                break
+                    if found:
+                        break
+
+        if self.stemmer:
+            try:
+                stem = self.stemmer.stem(lower)
+                stem_norm = self._normalize_german_token(stem)
+                if stem_norm in self.compound_vocab:
+                    score += 1.5
+            except Exception:
+                pass
+
+        if any(normalized.endswith(suffix) for suffix in GERMAN_COMPOUND_SUFFIXES):
+            score += 0.5
+
+        if len(part) >= 5:
+            score += 0.3
+
+        return score
+
+    def _normalize_german_token(self, token):
+        normalized = token.lower()
+        replacements = {
+            'ä': 'ae',
+            'ö': 'oe',
+            'ü': 'ue',
+            'ß': 'ss'
+        }
+        for src, dest in replacements.items():
+            normalized = normalized.replace(src, dest)
+        return normalized
+
+    def _capitalize_preserve(self, token):
+        token = token.strip()
+        if not token:
+            return ''
+        return token[0].upper() + token[1:]
     
-    def _generate_related_terms(self, keywords, language='de', max_related=5):
+    def _generate_related_terms(self, keywords, language='de', max_related=MAX_SYNONYMS_DEFAULT):
         """Generate related terms and synonyms for given keywords using OpenAI.
         
         Args:
@@ -603,91 +899,75 @@ JSON array:"""
             return []
     
     def _find_related_words(self, word, limit=3, min_similarity=0.6):
-        """Find semantically related words using word embeddings.
-        
-        Args:
-            word: Input word to find related terms for
-            limit: Maximum number of related words to return
-            min_similarity: Minimum cosine similarity threshold (0-1)
-            
-        Returns:
-            list: List of related words
-        """
-        if not self.nlp:
+        """Find semantically related words using heuristics instead of embeddings."""
+        if not word:
             return []
-        
-        try:
-            # Process the input word to get its word vector
-            doc = self.nlp(word.lower())
-            if not doc or not doc.vector_norm:
-                logging.debug(f"No word vector found for '{word}'")
-                return []
-            
-            # Get the word's vector
-            word_vector = doc.vector
-            
-            # Define a comprehensive list of potentially related terms to check
-            # Expanded context terms for better semantic coverage
-            context_terms = {
-                'strasse': ['verkehr', 'autobahn', 'fahrbahn', 'strassenverkehr', 'infrastruktur', 
-                           'verkehrsweg', 'fahrzeug', 'transport', 'strassenbau', 'mobilität'],
-                'haus': ['gebäude', 'immobilie', 'wohnung', 'bauwerk', 'architektur', 
-                        'wohnhaus', 'bau', 'konstruktion', 'wohnraum'],
-                'wasser': ['gewässer', 'fluss', 'see', 'hydro', 'aqua', 'wasserkraft', 
-                          'wasserversorgung', 'gewässerschutz', 'hydrologie'],
-                'verkehr': ['transport', 'mobilität', 'fahrzeug', 'strasse', 'infrastruktur',
-                           'beförderung', 'logistik', 'verkehrsmittel', 'verkehrswesen'],
-                'schule': ['bildung', 'unterricht', 'lernen', 'ausbildung', 'pädagogik',
-                          'bildungswesen', 'schulwesen', 'erziehung', 'lehre'],
-                'arbeit': ['beschäftigung', 'beruf', 'erwerbstätigkeit', 'job', 'arbeitsplatz',
-                          'arbeitswelt', 'berufstätigkeit', 'anstellung', 'tätigkeit'],
-                'gesundheit': ['medizin', 'pflege', 'krankheit', 'therapie', 'heilung',
-                              'gesundheitswesen', 'medizinisch', 'ärztlich', 'gesundheitsversorgung'],
-                'umfahrung': ['verkehr', 'strasse', 'umleitung', 'verkehrsführung', 'strassenführung'],
-                'stadt': ['gemeinde', 'ortschaft', 'kommune', 'stadtgebiet', 'urban', 'städtisch'],
-                'land': ['region', 'gebiet', 'landschaft', 'territorium', 'bezirk', 'ländlich'],
-                'bahn': ['eisenbahn', 'zug', 'schiene', 'verkehrsmittel', 'transport', 'bahnverkehr'],
-                'platz': ['ort', 'fläche', 'areal', 'standort', 'bereich', 'raum']
-            }
-            
-            # Check if we have predefined related terms
-            word_lower = word.lower()
-            candidate_terms = set()
-            
-            # Direct lookup
-            if word_lower in context_terms:
-                candidate_terms.update(context_terms[word_lower])
-            
-            # Search for partial matches
-            for key_word, related in context_terms.items():
-                if word_lower in related or key_word in word_lower or word_lower in key_word:
-                    candidate_terms.update(related)
-                    candidate_terms.add(key_word)
-            
-            # Calculate similarity for candidate terms
-            similar_words = []
-            for candidate in candidate_terms:
-                if candidate == word_lower:
-                    continue
-                    
-                candidate_doc = self.nlp(candidate)
-                if candidate_doc and candidate_doc.vector_norm:
-                    similarity = doc.similarity(candidate_doc)
-                    if similarity >= min_similarity:
-                        similar_words.append((candidate, similarity))
-            
-            # Sort by similarity and return top results
-            similar_words.sort(key=lambda x: x[1], reverse=True)
-            results = [word.capitalize() for word, sim in similar_words[:limit]]
-            
-            if results:
-                logging.info(f"Found related words for '{word}': {results}")
-            
-            return results
-            
-        except Exception as e:
-            logging.debug(f"Failed to find related words for '{word}': {e}")
-            return []
+
+        word_norm = self._normalize_german_token(word)
+        prefix_len = max(2, int(min_similarity * 5))
+        suffix_len = max(2, int(min_similarity * 4))
+
+        context_terms = {
+            'strasse': ['verkehr', 'autobahn', 'fahrbahn', 'strassenverkehr', 'infrastruktur',
+                        'verkehrsweg', 'fahrzeug', 'transport', 'strassenbau', 'mobilitaet'],
+            'haus': ['gebaeude', 'immobilie', 'wohnung', 'bauwerk', 'architektur',
+                     'wohnhaus', 'bau', 'konstruktion', 'wohnraum'],
+            'wasser': ['gewaesser', 'fluss', 'see', 'hydro', 'aqua', 'wasserkraft',
+                       'wasserversorgung', 'gewaesserschutz', 'hydrologie'],
+            'verkehr': ['transport', 'mobilitaet', 'fahrzeug', 'strasse', 'infrastruktur',
+                        'befoerderung', 'logistik', 'verkehrsmittel', 'verkehrswesen'],
+            'schule': ['bildung', 'unterricht', 'lernen', 'ausbildung', 'paedagogik',
+                       'bildungswesen', 'schulwesen', 'erziehung', 'lehre'],
+            'arbeit': ['beschaeftigung', 'beruf', 'erwerbstaetigkeit', 'job', 'arbeitsplatz',
+                       'arbeitswelt', 'berufstaetigkeit', 'anstellung', 'taetigkeit'],
+            'gesundheit': ['medizin', 'pflege', 'krankheit', 'therapie', 'heilung',
+                           'gesundheitswesen', 'medizinisch', 'aerztlich', 'gesundheitsversorgung'],
+            'umfahrung': ['verkehr', 'strasse', 'umleitung', 'verkehrsfuehrung', 'strassenfuehrung'],
+            'stadt': ['gemeinde', 'ortschaft', 'kommune', 'stadtgebiet', 'urban', 'staedtisch'],
+            'land': ['region', 'gebiet', 'landschaft', 'territorium', 'bezirk', 'laendlich'],
+            'bahn': ['eisenbahn', 'zug', 'schiene', 'verkehrsmittel', 'transport', 'bahnverkehr'],
+            'platz': ['ort', 'flaeche', 'areal', 'standort', 'bereich', 'raum']
+        }
+
+        candidate_terms = []
+        for base_word, related_terms in context_terms.items():
+            base_norm = self._normalize_german_token(base_word)
+            related_norms = [self._normalize_german_token(term) for term in related_terms]
+            triggered = (
+                word_norm == base_norm or
+                word_norm in related_norms or
+                base_norm[:prefix_len] == word_norm[:prefix_len]
+            )
+            if not triggered:
+                for rel_norm in related_norms:
+                    if rel_norm[:prefix_len] == word_norm[:prefix_len]:
+                        triggered = True
+                        break
+                    if rel_norm[-suffix_len:] == word_norm[-suffix_len:]:
+                        triggered = True
+                        break
+
+            if triggered:
+                candidate_terms.append(base_word)
+                candidate_terms.extend(related_terms)
+
+        for vocab_word in self.compound_vocab:
+            vocab_norm = vocab_word
+            if vocab_norm[:prefix_len] == word_norm[:prefix_len] or vocab_norm[-suffix_len:] == word_norm[-suffix_len:]:
+                candidate_terms.append(vocab_word)
+
+        ordered = []
+        for candidate in candidate_terms:
+            normalized = self._capitalize_preserve(candidate)
+            if normalized.lower() == word.lower():
+                continue
+            if normalized not in ordered:
+                ordered.append(normalized)
+            if len(ordered) >= limit:
+                break
+
+        return ordered
+
     def _discover_synonyms_from_wikidata(self, query, limit=3):
         """Discover synonyms and related terms using Wikidata's linked data relationships"""
         synonyms = set()
@@ -711,12 +991,15 @@ JSON array:"""
                 'limit': 1  # Just get the best match
             }
 
-            response = self.session.get(self.wikidata_base_url, params=search_params, timeout=10, verify=self.verify_ssl)
+            response = self.session.get(self.wikidata_base_url, params=search_params, timeout=TIMEOUT_DEFAULT, verify=self.verify_ssl)
             if response.status_code == 200:
                 data = response.json()
                 if 'search' in data and data['search']:
                     entity_id = data['search'][0].get('id')
                     if entity_id:
+                        # Skip if it's a family name
+                        if self._is_wikidata_family_name(entity_id):
+                            return []
                         # Get related entities using Wikidata properties
                         related_terms = self._get_wikidata_related_terms(entity_id)
                         synonyms.update(related_terms)
@@ -726,7 +1009,7 @@ JSON array:"""
 
         result = list(synonyms)[:limit]
         try:
-            cache.set(cache_key, result, timeout=3600)
+            cache.set(cache_key, result, timeout=CACHE_TIMEOUT_DEFAULT)
         except Exception:
             pass
         return result
@@ -775,6 +1058,9 @@ JSON array:"""
                                         if 'value' in claim['mainsnak']['datavalue']:
                                             target_id = claim['mainsnak']['datavalue']['value'].get('id')
                                             if target_id:
+                                                # Skip family names
+                                                if self._is_wikidata_family_name(target_id):
+                                                    continue
                                                 # Get label for the related entity
                                                 related_label = self._get_wikidata_entity_label(target_id)
                                                 if related_label:
@@ -805,7 +1091,7 @@ JSON array:"""
                 'format': 'json'
             }
 
-            response = self.session.get(self.wikidata_base_url, params=params, timeout=5, verify=self.verify_ssl)
+            response = self.session.get(self.wikidata_base_url, params=params, timeout=TIMEOUT_SHORT, verify=self.verify_ssl)
             if response.status_code == 200:
                 data = response.json()
                 if 'entities' in data and entity_id in data['entities']:
@@ -816,7 +1102,7 @@ JSON array:"""
                             if lang in entity['labels'] and 'value' in entity['labels'][lang]:
                                 value = entity['labels'][lang]['value']
                                 try:
-                                    cache.set(cache_key, value, timeout=24*3600)
+                                    cache.set(cache_key, value, timeout=CACHE_TIMEOUT_LONG)
                                 except Exception:
                                     pass
                                 return value
@@ -831,7 +1117,7 @@ JSON array:"""
 
         try:
             # Do a broader search in TERMDAT to find related concepts
-            url = "https://www.termdat.bk.admin.ch/api/Search/Search"
+            url = TERMDAT_SEARCH_URL
             params = {
                 'pageindex': 1,
                 'pagesize': 20,  # Get more results for analysis
@@ -914,7 +1200,7 @@ JSON array:"""
         This avoids invoking the heavier search_termdat which may loop back to synonyms.
         """
         try:
-            url = "https://www.termdat.bk.admin.ch/api/Search/Search"
+            url = TERMDAT_SEARCH_URL
             params = {
                 'pageindex': 1,
                 'pagesize': 5,
@@ -924,7 +1210,7 @@ JSON array:"""
                 'fields.term': 'true',
                 'fields.definition': 'false'
             }
-            resp = requests.get(url, params=params, timeout=8, verify=self.verify_ssl)
+            resp = requests.get(url, params=params, timeout=TIMEOUT_MEDIUM, verify=self.verify_ssl)
             if resp.status_code == 200:
                 data = resp.json()
                 if 'searchEntries' in data and isinstance(data['searchEntries'], list):
@@ -1166,10 +1452,10 @@ JSON array:"""
             swiss_text = page_content.get('swiss', '') or ''
 
             logging.info(f"Extracting keywords from Wikipedia article '{page_content['title']}' ({lang})")
-            summary_keywords = self._extract_keywords_from_text(summary_text, max_keywords=8, nouns_only=True)
+            summary_keywords = self._extract_keywords_from_text(summary_text, max_keywords=MAX_KEYWORDS_DEFAULT, nouns_only=True)
             swiss_keywords = []
             if swiss_text.strip():
-                swiss_keywords = self._extract_keywords_from_text(swiss_text, max_keywords=20, nouns_only=True)
+                swiss_keywords = self._extract_keywords_from_text(swiss_text, max_keywords=MAX_KEYWORDS_SWISS, nouns_only=True)
 
             # Prioritize Swiss section nouns so terms like Polizei/Feuerwehr survive truncation
             raw_keywords = swiss_keywords + summary_keywords
@@ -1272,7 +1558,7 @@ JSON array:"""
                     'n': 1
                 }
 
-                resp = requests.post('https://api.openai.com/v1/chat/completions', headers=headers, json=payload, timeout=15)
+                resp = requests.post(OPENAI_API_URL, headers=headers, json=payload, timeout=TIMEOUT_OPENAI)
                 if resp.ok:
                     body = resp.json()
                     text = ''
@@ -1365,6 +1651,11 @@ JSON array:"""
         """Search TERMDAT for keywords using the official API with multilingual support and synonym expansion
         This version limits pagesize and stops early when enough results have been gathered to reduce API calls.
         """
+        # Check if endpoint is disabled due to repeated failures
+        if self.endpoint_disabled.get('termdat', False):
+            logging.warning("TERMDAT endpoint is disabled due to repeated failures - skipping search")
+            return []
+        
         results = []
         processed_entry_ids = set()  # Track processed entries to avoid duplicates
 
@@ -1384,11 +1675,12 @@ JSON array:"""
             # 2=DE, 3=EN, 6=FR, 7=IT, 8=RM
             # Note: Excluding Spanish (4=ES) as I14Y platform cannot handle it
             language_map = {2: 'de', 6: 'fr', 7: 'it', 3: 'en', 8: 'rm'}
+            code_to_language_id = {code: lang_id for lang_id, code in language_map.items()}
 
             # Search for each query (original + synonyms)
             for search_query in search_queries:
                 # TERMDAT API search endpoint - use frontend-style parameters to get all collections
-                url = "https://www.termdat.bk.admin.ch/api/Search/Search"
+                url = TERMDAT_SEARCH_URL
 
                 # Build parameters matching the frontend approach for comprehensive results
                 # Include language IDs to match frontend behavior and access geopolitical collections
@@ -1413,16 +1705,22 @@ JSON array:"""
                     'fields.comment': 'false'
                 }
                 
-                # Build URL with multiple language ID parameters (like frontend does)
-                # Language IDs: 2=DE, 3=EN, 6=FR, 7=IT, 8=RM
-                language_ids = [2, 6, 7, 8, 3]  # DE, FR, IT, RM, EN (exclude Spanish=4)
+                effective_lang = self._infer_keyword_language(search_query, fallback=query_lang)
+                language_id = code_to_language_id.get(effective_lang, 2)
+                source_language_ids = [language_id]
+                target_language_ids = [2, 6, 7, 3, 8]  # Always request DE, FR, IT, EN, RM labels
+                logging.debug(
+                    f"TERMDAT language inferred for '{search_query}': {effective_lang} (id {language_id}); "
+                    f"requesting target languages {target_language_ids}"
+                )
                 params_list = []
                 for key, value in base_params.items():
                     params_list.append(f"{key}={value}")
                 
-                # Add language parameters as the frontend does (multiple params with same name)
-                for lang_id in language_ids:
+                # Limit search language but request all translations for display
+                for lang_id in source_language_ids:
                     params_list.append(f"sourceLanguageIds={lang_id}")
+                for lang_id in target_language_ids:
                     params_list.append(f"targetLanguageIds={lang_id}")
                 
                 full_url = url + "?" + "&".join(params_list)
@@ -1432,6 +1730,8 @@ JSON array:"""
                 response = requests.get(full_url, timeout=8, verify=self.verify_ssl)
 
                 if response.status_code == 200:
+                    # Reset failure count on success
+                    self.endpoint_failures['termdat'] = 0
                     try:
                         data = response.json()
 
@@ -1499,8 +1799,8 @@ JSON array:"""
                                     if 'collection' in entry and 'name' in entry['collection']:
                                         collection_name = entry['collection']['name']
 
-                                    # Build the TERMDAT URI
-                                    termdat_uri = f"https://register.ld.admin.ch/termdat/{entry_id}"
+                                    # Build the TERMDAT URI - prefer register.ld.admin.ch but fall back to search URL
+                                    termdat_uri = _get_termdat_url(entry_id)
 
                                     # Get a suitable description
                                     description = f"TERMDAT entry for '{query}'"
@@ -1533,9 +1833,11 @@ JSON array:"""
                         logging.error(f"Error parsing TERMDAT response for '{search_query}': {e}")
                 else:
                     logging.error(f"TERMDAT API returned non-200 status for '{search_query}': {response.status_code}")
+                    self._handle_endpoint_failure('termdat')
 
         except Exception as e:
             logging.error(f"Error searching TERMDAT: {e}")
+            self._handle_endpoint_failure('termdat')
 
         # Sort results: exact matches first, then synonym matches, then by number of available languages
         def sort_key(result):
@@ -1571,10 +1873,17 @@ JSON array:"""
         """Search GEMET for keywords with multilingual support, optimized for geo-related contexts
         Uses the official GEMET REST API to find concepts and retrieve multilingual labels
         """
+        # Check if endpoint is disabled due to repeated failures
+        if self.endpoint_disabled.get('gemet', False):
+            logging.warning("GEMET endpoint is disabled due to repeated failures - skipping search")
+            return []
+        
         results = []
         
-        # Cache key based on the query to avoid repeated identical searches
-        cache_key = f"gemet_results:{query.lower()}"
+        effective_language = self._infer_keyword_language(query)
+
+        # Cache key based on the query and inferred language to avoid repeated identical searches
+        cache_key = f"gemet_results:{query.lower()}:{effective_language}"
         try:
             cached = cache.get(cache_key)
             if cached:
@@ -1586,24 +1895,16 @@ JSON array:"""
         found_concepts = []  # List to store all found concepts
         
         try:
-            logging.info(f"Starting GEMET search for '{query}'")
+            logging.info(f"Starting GEMET search for '{query}' in language '{effective_language}'")
             
             # First, search for concepts matching the query using keyword search
-            search_url = "https://www.eionet.europa.eu/gemet/getConceptsMatchingKeyword"
+            search_url = GEMET_CONCEPTS_URL
             
-            # Try different search modes and languages for better coverage
-            search_modes = [3, 2, 4]  # Contains, Prefix, Auto search
-            
-            # Try a few search strategies to maximize results
+            # Try a few search strategies while sticking to the inferred language
             search_strategies = [
-                # Strategy 1: Original query in English with contains search
-                {'keyword': query.lower(), 'language': 'en', 'search_mode': 3},
-                # Strategy 2: Original query in German with contains search
-                {'keyword': query.lower(), 'language': 'de', 'search_mode': 3},
-                # Strategy 3: Try auto search mode with original query
-                {'keyword': query.lower(), 'language': 'en', 'search_mode': 4},
-                # Strategy 4: Try auto search mode with original query in German
-                {'keyword': query.lower(), 'language': 'de', 'search_mode': 4},
+                {'keyword': query.lower(), 'language': effective_language, 'search_mode': 3},  # contains
+                {'keyword': query.lower(), 'language': effective_language, 'search_mode': 4},  # auto
+                {'keyword': query.lower(), 'language': effective_language, 'search_mode': 2},  # prefix
             ]
             
             # Check if query is geographical in nature
@@ -1630,23 +1931,21 @@ JSON array:"""
             for term, replacements in geo_terms.items():
                 if term in query_lower:
                     for replacement in replacements:
-                        for lang in ['en', 'de']:
-                            search_strategies.append({
-                                'keyword': replacement.lower(),
-                                'language': lang,
-                                'search_mode': 3
-                            })
+                        search_strategies.append({
+                            'keyword': replacement.lower(),
+                            'language': effective_language,
+                            'search_mode': 3
+                        })
             
             # Special handling for certain geographical terms 
             if any(region in query_lower for region in ['aargau', 'zürich', 'bern', 'geneva']):
                 # For Swiss cantons/regions, add search for geographical/administrative terms
                 for term in ['administrative region', 'geographical region', 'canton', 'administrative unit']:
-                    for lang in ['en', 'de']:
-                        search_strategies.append({
-                            'keyword': term.lower(),
-                            'language': lang,
-                            'search_mode': 3
-                        })
+                    search_strategies.append({
+                        'keyword': term.lower(),
+                        'language': effective_language,
+                        'search_mode': 3
+                    })
             
             # Try all search strategies and collect found concepts
             for strategy in search_strategies:
@@ -1659,11 +1958,13 @@ JSON array:"""
                 
                 logging.info(f"GEMET Search Strategy: {strategy}")
                 try:
-                    # Use 30 second timeout - GEMET API can be slow
-                    search_response = self.session.get(search_url, params=search_params, timeout=30, verify=self.verify_ssl)
+                    # Use 8 second timeout to prevent long waits
+                    search_response = self.session.get(search_url, params=search_params, timeout=8, verify=self.verify_ssl)
                     logging.info(f"GEMET Search Response status: {search_response.status_code}")
                     
                     if search_response.status_code == 200:
+                        # Reset failure count on success
+                        self.endpoint_failures['gemet'] = 0
                         search_concepts = search_response.json()
                         if search_concepts and len(search_concepts) > 0:
                             logging.info(f"GEMET found {len(search_concepts)} concepts with strategy: {strategy}")
@@ -1673,10 +1974,14 @@ JSON array:"""
                             # Mark this as a fallback result if we're using a related term
                             if strategy['keyword'] != query.lower():
                                 logging.info(f"Used fallback term '{strategy['keyword']}' for original query '{query}'")
+                    else:
+                        self._handle_endpoint_failure('gemet')
                 except requests.exceptions.Timeout:
                     logging.warning(f"GEMET API timeout for query '{strategy['keyword']}' - server may be slow, skipping this strategy")
+                    self._handle_endpoint_failure('gemet')
                 except requests.exceptions.RequestException as e:
                     logging.warning(f"GEMET API request failed for '{strategy['keyword']}': {e}")
+                    self._handle_endpoint_failure('gemet')
                 except Exception as e:
                     logging.error(f"Unexpected error in GEMET search strategy: {e}")
             
@@ -1781,7 +2086,7 @@ JSON array:"""
                     if len(results) >= 3:  # Limit to 3 fallback results
                         break
                         
-                    for lang in ['en', 'de']:
+                    for lang in [effective_language]:
                         try:
                             search_params = {
                                 'keyword': term.lower(),
@@ -1790,7 +2095,7 @@ JSON array:"""
                                 'language': lang
                             }
                             
-                            fallback_response = self.session.get(search_url, params=search_params, timeout=30, verify=self.verify_ssl)
+                            fallback_response = self.session.get(search_url, params=search_params, timeout=8, verify=self.verify_ssl)
                             if fallback_response.status_code == 200:
                                 fallback_concepts = fallback_response.json()
                                 if fallback_concepts:
@@ -1850,13 +2155,13 @@ JSON array:"""
         for language in ['en', 'de']:
             try:
                 # Get concept details including definition
-                url = "https://www.eionet.europa.eu/gemet/getConcept"
+                url = GEMET_CONCEPT_URL
                 params = {
                     'concept_uri': concept_uri,
                     'language': language
                 }
                 
-                response = self.session.get(url, params=params, timeout=30, verify=self.verify_ssl)
+                response = self.session.get(url, params=params, timeout=8, verify=self.verify_ssl)
                 if response.status_code == 200:
                     data = response.json()
                     if 'definition' in data and 'string' in data['definition']:
@@ -1884,13 +2189,13 @@ JSON array:"""
         try:
             logging.info(f"Getting multilingual labels for GEMET concept: {concept_uri}")
             # Get all translations for this concept's preferred label
-            url = "https://www.eionet.europa.eu/gemet/getAllTranslationsForConcept"
+            url = GEMET_TRANSLATIONS_URL
             params = {
                 'concept_uri': concept_uri,
                 'property_uri': 'http://www.w3.org/2004/02/skos/core#prefLabel'
             }
             
-            response = self.session.get(url, params=params, timeout=30, verify=self.verify_ssl)
+            response = self.session.get(url, params=params, timeout=8, verify=self.verify_ssl)
             logging.info(f"GEMET translations response status: {response.status_code}")
             
             if response.status_code == 200:
@@ -1922,12 +2227,56 @@ JSON array:"""
         
         return multilingual_terms if multilingual_terms else None
     
+    def _is_wikidata_family_name(self, entity_id):
+        """Check if a Wikidata entity is a family name (instance of Q101352)"""
+        try:
+            cache_key = f"wd_family_check:{entity_id}"
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            entity_params = {
+                'action': 'wbgetentities',
+                'ids': entity_id,
+                'props': 'claims',
+                'format': 'json'
+            }
+
+            response = self.session.get(self.wikidata_base_url, params=entity_params, timeout=TIMEOUT_SHORT, verify=self.verify_ssl)
+            if response.status_code == 200:
+                data = response.json()
+                if 'entities' in data and entity_id in data['entities']:
+                    entity = data['entities'][entity_id]
+                    claims = entity.get('claims', {})
+                    if 'P31' in claims:  # instance of
+                        for claim in claims['P31']:
+                            mainsnak = claim.get('mainsnak', {})
+                            if mainsnak.get('property') == 'P31':
+                                datavalue = mainsnak.get('datavalue', {})
+                                if datavalue.get('type') == 'wikibase-entityid':
+                                    value = datavalue.get('value', {})
+                                    if value.get('id') == 'Q101352':  # family name
+                                        cache.set(cache_key, True, timeout=24*3600)
+                                        return True
+                cache.set(cache_key, False, timeout=24*3600)
+                return False
+        except Exception as e:
+            logging.debug(f"Error checking if {entity_id} is family name: {e}")
+        return False
+    
     def search_wikidata(self, query):
         """Search Wikidata for keywords with multilingual support"""
+        # Check if endpoint is disabled due to repeated failures
+        if self.endpoint_disabled.get('wikidata', False):
+            logging.warning("Wikidata endpoint is disabled due to repeated failures - skipping search")
+            return []
+        
         results = []
         try:
+            effective_language = self._infer_keyword_language(query)
+
             # Try cached final results first to avoid repeated Wikidata calls
-            cache_key = f"wd_results:{query.lower()}"
+            cache_key = f"wd_results:{query.lower()}:{effective_language}"
             cached = cache.get(cache_key)
             if cached:
                 logging.debug(f"Returning cached Wikidata results for '{query}'")
@@ -1937,17 +2286,22 @@ JSON array:"""
             search_params = {
                 'action': 'wbsearchentities',
                 'search': query,
-                'language': 'en',
+                'language': effective_language,
                 'format': 'json',
                 'limit': 3
             }
 
             search_response = self.session.get(self.wikidata_base_url, params=search_params, timeout=10, verify=self.verify_ssl)
             if search_response.status_code == 200:
+                # Reset failure count on success
+                self.endpoint_failures['wikidata'] = 0
                 search_data = search_response.json()
                 for item in search_data.get('search', []):
                     entity_id = item.get('id', '')
                     if entity_id:
+                        # Skip family names
+                        if self._is_wikidata_family_name(entity_id):
+                            continue
                         # Get multilingual labels for this entity
                         multilingual_terms = self._get_wikidata_multilingual_labels(entity_id)
                         if multilingual_terms:
@@ -1957,6 +2311,8 @@ JSON array:"""
                                 'uri': f"http://www.wikidata.org/entity/{entity_id}",
                                 'description': item.get('description', f'Wikidata entity for {query}')
                             })
+            else:
+                self._handle_endpoint_failure('wikidata')
 
             try:
                 cache.set(cache_key, results, timeout=3600)
@@ -1965,9 +2321,24 @@ JSON array:"""
 
         except Exception as e:
             logging.error(f"Error searching Wikidata: {e}")
+            self._handle_endpoint_failure('wikidata')
 
         return results
 
+    def _handle_endpoint_failure(self, endpoint_name):
+        """Track endpoint failures and disable if threshold exceeded"""
+        if endpoint_name not in self.endpoint_failures:
+            return
+        
+        self.endpoint_failures[endpoint_name] += 1
+        
+        if self.endpoint_failures[endpoint_name] >= self.max_endpoint_failures:
+            self.endpoint_disabled[endpoint_name] = True
+            logging.error(
+                f"{endpoint_name.upper()} endpoint has failed {self.endpoint_failures[endpoint_name]} times - "
+                f"disabling for this session to prevent delays"
+            )
+    
     def _get_wikidata_multilingual_labels(self, entity_id):
         """Get multilingual labels for a Wikidata entity"""
         multilingual_terms = {}
@@ -2124,7 +2495,7 @@ JSON array:"""
             detected_lang = self._detect_language(description)
             ai_keywords = self._generate_keywords_with_ai(
                 description, 
-                max_keywords=8, 
+                max_keywords=MAX_KEYWORDS_DEFAULT, 
                 language=detected_lang,
                 publisher=publisher,
                 themes=themes
@@ -2191,43 +2562,48 @@ JSON array:"""
             else:
                 unmatched_nouns.append(noun)
         
-        # Step 1b: Split compound words to enrich results with component parts (only if include_synonyms)
+        # Step 1b: Split compound words to enrich results with component parts (always enabled)
         # Process both matched (to get parts) and unmatched (to find alternatives)
-        if include_synonyms:
-            compounds_to_split = list(set(matched_compound_nouns + unmatched_nouns))
-            
-            if compounds_to_split:
-                logging.info(f"Attempting to split {len(compounds_to_split)} compound nouns to extract parts.")
-                for noun in compounds_to_split:
-                    # Try to split the compound word
-                    parts = self._split_compound_words(noun)
-                    if len(parts) > 1:
-                        logging.info(f"Compound word '{noun}' split into: {parts}")
-                        # Validate each part
-                        for part in parts:
-                            part_matches = self._validate_keyword_in_sources(part, query_lang)
-                            if part_matches:
-                                for match in part_matches:
-                                    match['source_type'] = 'extracted_compound_part'
-                                add_unique(part_matches)
-                                validated_parts.append(part)  # Track for related term generation
-            
-            # Step 1c: Generate related terms/synonyms if we have validated parts
-            if validated_parts:
-                logging.info(f"Generating related terms for validated parts: {validated_parts}")
-                related_terms = self._generate_related_terms(validated_parts, language=query_lang, max_related=6)
-                for term in related_terms:
-                    term_matches = self._validate_keyword_in_sources(term, query_lang)
-                    for match in term_matches:
-                        match['source_type'] = 'related_term'
-                    add_unique(term_matches)
+        compounds_to_split = list(dict.fromkeys(matched_compound_nouns + unmatched_nouns))
+        if compounds_to_split:
+            logging.info(f"Attempting to split {len(compounds_to_split)} compound nouns to extract parts.")
+            seen_split_parts = set()
+            for noun in compounds_to_split:
+                # Try to split the compound word
+                parts = self._split_compound_words(noun)
+                if len(parts) <= 1:
+                    continue
+                logging.info(f"Compound word '{noun}' split into: {parts}")
+                # Validate each unique part
+                for part in parts:
+                    normalized_part = part.strip().lower()
+                    if not normalized_part or normalized_part in seen_split_parts:
+                        continue
+                    seen_split_parts.add(normalized_part)
+                    part_matches = self._validate_keyword_in_sources(part, query_lang)
+                    if part_matches:
+                        for match in part_matches:
+                            match['source_type'] = 'extracted_compound_part'
+                        add_unique(part_matches)
+                        if include_synonyms:
+                            validated_parts.append(part)  # Track for related term generation
+
+        # Step 1c: Generate related terms/synonyms if we have validated parts (only when enabled)
+        if include_synonyms and validated_parts:
+            logging.info(f"Generating related terms for validated parts: {validated_parts}")
+            related_terms = self._generate_related_terms(validated_parts, language=query_lang, max_related=6)
+            for term in related_terms:
+                term_matches = self._validate_keyword_in_sources(term, query_lang)
+                for match in term_matches:
+                    match['source_type'] = 'related_term'
+                add_unique(term_matches)
         
         # Step 2: Send full input to AI (only if include_synonyms is True)
         if include_synonyms:
             detected_lang = self._detect_language(user_input)
             ai_keywords = self._generate_keywords_with_ai(
                 user_input,
-                max_keywords=8,
+                max_keywords=MAX_KEYWORDS_DEFAULT,
                 language=detected_lang
             )
             
@@ -2296,7 +2672,7 @@ JSON array:"""
         # Use OpenAI on the full expression to propose additional keywords
         if query_clean:
             ai_lang = query_lang.split('-')[0] if query_lang else 'de'
-            ai_keywords = self._extract_keywords_openai(query_clean, max_keywords=6, language=ai_lang)
+            ai_keywords = self._extract_keywords_openai(query_clean, max_keywords=MAX_KEYWORDS_AI, language=ai_lang)
             if ai_keywords:
                 for kw in ai_keywords:
                     add_candidate(kw)
@@ -2305,7 +2681,7 @@ JSON array:"""
                 saved_key = self.openai_api_key
                 self.openai_api_key = None
                 try:
-                    heuristic_keywords = self._extract_keywords_from_text(query_clean, max_keywords=5)
+                    heuristic_keywords = self._extract_keywords_from_text(query_clean, max_keywords=MAX_KEYWORDS_HEURISTIC)
                     for kw in heuristic_keywords:
                         add_candidate(kw)
                 finally:
@@ -2636,13 +3012,15 @@ JSON array:"""
                     logging.error(f"Wikidata search failed for '{query_text}': {e}")
                     return ('wikidata', [])
             
-            # Execute all 3 API calls in parallel
+            # Build list of futures only for enabled endpoints
+            futures = {}
             with ThreadPoolExecutor(max_workers=3) as executor:
-                futures = {
-                    executor.submit(safe_search_termdat): 'termdat',
-                    executor.submit(safe_search_gemet): 'gemet',
-                    executor.submit(safe_search_wikidata): 'wikidata'
-                }
+                if not self.endpoint_disabled.get('termdat', False):
+                    futures[executor.submit(safe_search_termdat)] = 'termdat'
+                if not self.endpoint_disabled.get('gemet', False):
+                    futures[executor.submit(safe_search_gemet)] = 'gemet'
+                if not self.endpoint_disabled.get('wikidata', False):
+                    futures[executor.submit(safe_search_wikidata)] = 'wikidata'
                 
                 # Yield results as each API completes (not waiting for all)
                 for future in as_completed(futures):
@@ -2809,7 +3187,7 @@ JSON array:"""
         if existing_keywords:
             logging.info(f"Stage 1: Searching for exact matches of {len(existing_keywords)} existing keywords IN PARALLEL")
             if yield_status:
-                yield {'type': 'status', 'stage': 'existing', 'message': 'Checking existing I14Y keywords in parallel...'}
+                yield {'type': 'status', 'stage': 'existing', 'message': f'Validating {len(existing_keywords)} existing I14Y keywords...'}
             searched_terms = set()
             
             for kw in existing_keywords:
@@ -2830,8 +3208,14 @@ JSON array:"""
 
                     search_lang = lang_hint or query_lang
                     
+                    if yield_status:
+                        yield {'type': 'status', 'stage': 'existing', 'message': f'Checking keyword "{label_value}" on TERMDAT, GEMET, and Wikidata...'}
+                    
                     # PARALLEL API CALLS - Stream results as they arrive
                     for source_name, source_results in search_all_sources_parallel(label_value, search_lang, include_syns=False):
+                        if yield_status and source_results:
+                            source_display = source_name.upper()
+                            yield {'type': 'status', 'stage': 'existing', 'message': f'Found "{label_value}" on {source_display}'}
                         added = add_unique_keywords(source_results)
                         if added:
                             # Immediately yield results from this source
@@ -2845,7 +3229,7 @@ JSON array:"""
         if not should_stop():
             logging.info("Stage 2: Extracting keywords with NLP")
             if yield_status:
-                yield {'type': 'status', 'stage': 'nlp', 'message': 'Extracting keywords from title/description...'}
+                yield {'type': 'status', 'stage': 'nlp', 'message': 'Analyzing title and description to extract relevant terms...'}
             
             # Gather text for analysis
             text_parts = []
@@ -2873,8 +3257,14 @@ JSON array:"""
                     if should_stop():
                         break
                     
+                    if yield_status:
+                        yield {'type': 'status', 'stage': 'nlp', 'message': f'Validating extracted term "{keyword}" on TERMDAT, GEMET, and Wikidata...'}
+                    
                     # PARALLEL API CALLS - Stream results as they arrive
                     for source_name, source_results in search_all_sources_parallel(keyword, query_lang, include_syns=True):
+                        if yield_status and source_results:
+                            source_display = source_name.upper()
+                            yield {'type': 'status', 'stage': 'nlp', 'message': f'Found "{keyword}" on {source_display}'}
                         added = add_unique_keywords(source_results)
                         if added:
                             yield emit_keywords('nlp', is_final=False, query_text=analysis_text)
@@ -2887,7 +3277,7 @@ JSON array:"""
         if not should_stop() and self.openai_api_key:
             logging.info("Stage 3: Extracting keywords with OpenAI")
             if yield_status:
-                yield {'type': 'status', 'stage': 'openai', 'message': 'Expanding with OpenAI (synonyms/related)...'}
+                yield {'type': 'status', 'stage': 'openai', 'message': 'Using AI to extract keywords from title, description, and publisher...'}
             
             # Gather all available text including publisher and themes
             text_parts = []
@@ -2920,16 +3310,25 @@ JSON array:"""
             
             if analysis_text:
                 try:
-                    extracted = self._extract_keywords_with_openai(analysis_text, max_keywords=10)
+                    extracted = self._extract_keywords_with_openai(analysis_text, max_keywords=MAX_KEYWORDS_DEFAULT)
                     if extracted:
                         logging.info(f"OpenAI extracted keywords: {extracted}")
+                        
+                        if yield_status:
+                            yield {'type': 'status', 'stage': 'openai', 'message': f'AI generated {len(extracted)} keywords, now validating...'}
                         
                         for keyword in extracted:
                             if should_stop():
                                 break
                             
+                            if yield_status:
+                                yield {'type': 'status', 'stage': 'openai', 'message': f'Checking AI-generated keyword "{keyword}" on TERMDAT, GEMET, and Wikidata...'}
+                            
                             # PARALLEL API CALLS - Stream results as they arrive
                             for source_name, source_results in search_all_sources_parallel(keyword, query_lang, include_syns=True):
+                                if yield_status and source_results:
+                                    source_display = source_name.upper()
+                                    yield {'type': 'status', 'stage': 'openai', 'message': f'Found "{keyword}" on {source_display}'}
                                 added = add_unique_keywords(source_results)
                                 if added:
                                     yield emit_keywords('openai', is_final=False, query_text=analysis_text)
@@ -2939,6 +3338,8 @@ JSON array:"""
                     logging.error(f"OpenAI extraction failed: {e}")
 
         logging.info(f"=== Final: {len(all_keywords)} keywords, {count_unique_labels()} unique ===")
+        if yield_status:
+            yield {'type': 'status', 'stage': 'complete', 'message': f'✓ Keyword discovery complete! Found {count_unique_labels()} unique keywords.'}
         yield emit_keywords('complete', is_final=True, query_text=description)
 
 keyword_generator = KeywordGenerator()
@@ -3060,7 +3461,7 @@ def search_keywords():
             extracted_keywords = [w.strip() for w in query.split() if w.strip()]
         else:
             # Extract keywords using NLP/AI (for longer texts or when synonyms are enabled)
-            extracted_keywords = keyword_generator._extract_keywords_from_text(query, max_keywords=5)
+            extracted_keywords = keyword_generator._extract_keywords_from_text(query, max_keywords=MAX_KEYWORDS_HEURISTIC)
         
         # Generate keywords based on source filter
         if source_filter == 'all':
@@ -3486,6 +3887,57 @@ def upload_to_i14y():
     except Exception as e:
         return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
 
+def _get_termdat_url(entry_id):
+    """Get the TERMDAT URL, preferring register.ld.admin.ch but falling back to search URL.
+    
+    Args:
+        entry_id: The TERMDAT entry ID
+    
+    Returns:
+        URL to the TERMDAT entry (either register.ld.admin.ch or search/entry URL)
+    """
+    if not entry_id:
+        return ''
+    
+    # Try the preferred register.ld.admin.ch URL format first
+    preferred_url = f"https://register.ld.admin.ch/termdat/{entry_id}"
+    fallback_url = f"https://www.termdat.bk.admin.ch/search/entry/{entry_id}"
+    
+    try:
+        # Check if the preferred URL works with a HEAD request (faster than GET)
+        response = http_session.head(preferred_url, timeout=3)
+        if response.ok or response.status_code in [200, 301, 302]:  # Accept redirects too
+            return preferred_url
+    except Exception as e:
+        logging.debug(f"register.ld.admin.ch URL check failed for {entry_id}: {e}")
+    
+    # Fall back to the search URL
+    return fallback_url
+
+def _build_i14y_url(object_type, identifier):
+    """Build the correct I14Y URL based on object type and identifier.
+    
+    Args:
+        object_type: 'dataset', 'dataservice', 'publicservice', or 'concept'
+        identifier: For datasets/publicservices: identifier; for dataservices/concepts: GUID
+    
+    Returns:
+        Full URL to the object on i14y.admin.ch
+    """
+    if not identifier:
+        return ''
+    
+    # Map object types to their URL paths
+    type_map = {
+        'dataset': 'datasets',
+        'dataservice': 'dataservices',
+        'publicservice': 'publicservices',
+        'concept': 'concepts'
+    }
+    
+    path = type_map.get(object_type, 'datasets')
+    return f"https://www.i14y.admin.ch/de/catalog/{path}/{identifier}"
+
 @app.route('/search-i14y-datasets', methods=['POST'])
 def search_i14y_datasets():
     """Search I14Y datasets using the I14Y API search endpoint"""
@@ -3499,17 +3951,8 @@ def search_i14y_datasets():
         return jsonify({'error': 'Search query is required'}), 400
     
     try:
-        # I14Y API search endpoint (selectable env)
-        env = request.json.get('env', 'prod').lower()
-        if env not in ['abnahme', 'prod']:
-            env = 'prod'
-
-        search_base = {
-            'abnahme': "https://input-backend.i14y.a.c.bfs.admin.ch",
-            'prod': "https://input-backend.i14y.c.bfs.admin.ch"
-        }[env]
-
-        i14y_search_url = f"{search_base}/api/Catalog/search"
+        # I14Y API search endpoint (prod only)
+        i14y_search_url = "https://input-backend.i14y.c.bfs.admin.ch/api/Catalog/search"
         
         params = {
             'query': query,
@@ -3608,6 +4051,7 @@ def search_i14y_datasets():
             dataset_info = {
                 'id': dataset.get('guid', '') or dataset.get('id', '') or dataset.get('identifier', ''),
                 'guid': dataset.get('guid', '') or dataset.get('id', '') or dataset.get('identifier', ''),
+                'identifier': dataset.get('identifier', '') or dataset.get('id', '') or dataset.get('guid', ''),
                 'title': extract_text(dataset.get('title', '')) or extract_text(dataset.get('name', '')) or extract_text(dataset.get('prefLabel', '')),
                 'description': extract_text(dataset.get('description', '')),
                 'publisher': extract_publisher_name(dataset.get('publisher', '')) or 
@@ -3621,8 +4065,9 @@ def search_i14y_datasets():
                           extract_status_field(dataset.get('statusText')),
                 'publicationLevel': dataset.get('publicationLevel', ''),
                 'modified': dataset.get('modified', '') or dataset.get('modificationDate', ''),
-                'url': f"https://input.i14y.admin.ch/catalog/datasets/{dataset.get('guid', '') or dataset.get('id', '')}" if (dataset.get('guid') or dataset.get('id')) else '',
+                'url': _build_i14y_url(object_type, dataset.get('identifier', '') or dataset.get('id', '') or dataset.get('guid', '')),
                 'objectType': object_type,
+                'isLocked': dataset.get('isLocked', False) or dataset.get('locked', False),  # Track locked status for concepts
                 'fullObject': dataset  # Store the full object for later use in updates
             }
             
@@ -3674,21 +4119,13 @@ def get_i14y_object():
         req = request.get_json(force=True)
         object_id = req.get('objectId') or req.get('object_id')
         object_type = (req.get('objectType') or req.get('object_type') or 'dataset').lower()
-        env = (req.get('env') or 'prod').lower()
-
         if not object_id:
             return jsonify({'error': 'objectId is required'}), 400
 
         if object_type not in ['dataset', 'dataservice', 'publicservice', 'concept']:
             return jsonify({'error': f'Unsupported objectType: {object_type}'}), 400
 
-        if env not in ['abnahme', 'prod']:
-            env = 'prod'
-
-        public_base = {
-            'abnahme': 'https://api-a.i14y.admin.ch/api/public/v1',
-            'prod': 'https://api.i14y.admin.ch/api/public/v1'
-        }[env]
+        public_base = 'https://api.i14y.admin.ch/api/public/v1'
 
         endpoint_map = {
             'dataset': '/datasets',
@@ -3703,7 +4140,7 @@ def get_i14y_object():
         response = http_session.get(url, timeout=10, verify=verify_ssl)
 
         if not response.ok:
-            logging.error(f"Failed to fetch I14Y object {object_type}:{object_id} ({env}): HTTP {response.status_code} - {response.text}")
+            logging.error(f"Failed to fetch I14Y object {object_type}:{object_id}: HTTP {response.status_code} - {response.text}")
             return jsonify({'error': f'I14Y public API returned {response.status_code}'}), response.status_code
 
         payload = response.json()
@@ -3729,8 +4166,12 @@ def get_i14y_object():
                             'email': ''
                         })
 
+        # Extract locked status from the full object
+        is_locked = full_object.get('isLocked', False) or full_object.get('locked', False)
+
         return jsonify({
             'fullObject': full_object,
+            'isLocked': is_locked,
             'validation': {
                 'missingContactEmails': missing_contact_emails,
                 'hasIssues': len(missing_contact_emails) > 0
@@ -3817,17 +4258,7 @@ def update_i14y_keywords():
         if not formatted_keywords:
             return jsonify({'error': 'No valid keywords to update'}), 400
         
-        # Determine environment
-        env = data.get('env', 'prod').lower()
-        if env not in ['abnahme', 'prod']:
-            env = 'prod'
-        
-        partner_base = {
-            'abnahme': 'https://api-a.i14y.admin.ch/api/partner/v1',
-            'prod': 'https://api.i14y.admin.ch/api/partner/v1'
-        }[env]
-        
-        partner_api_url = f'{partner_base}{endpoint}'
+        partner_api_url = f'https://api.i14y.admin.ch/api/partner/v1{endpoint}'
         
         headers = {
             'Authorization': api_token,
@@ -3922,16 +4353,9 @@ def update_i14y_keywords():
 def get_i14y_organisations():
     """Fetch organisations from I14Y agents endpoint"""
     try:
-        env = request.json.get('env', 'prod').lower()
-        if env not in ['abnahme', 'prod']:
-            env = 'prod'
+        request.get_json(silent=True)  # Keep parity with earlier API but ignore payload
 
-        agents_base = {
-            'abnahme': "https://input-backend.i14y.a.c.bfs.admin.ch/api/Agent",
-            'prod': "https://input-backend.i14y.c.bfs.admin.ch/api/Agent"
-        }[env]
-
-        response = http_session.get(agents_base, timeout=10)
+        response = http_session.get("https://input-backend.i14y.c.bfs.admin.ch/api/Agent", timeout=10)
         
         if not response.ok:
             logging.error(f"Failed to fetch organisations: HTTP {response.status_code}")
