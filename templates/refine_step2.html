@@ -473,6 +473,27 @@
             if (card) {
                 if (keyword.isSelected) {
                     card.classList.add('selected');
+                    
+                    // DCAT-AP CH cascade rule: if this is a CV keyword (TERMDAT, GEMET, Wikidata),
+                    // auto-deselect any existing I14Y keyword or manually added LOCAL keyword with the same label
+                    const kwSource = (keyword.source || '').toUpperCase();
+                    if (['TERMDAT', 'GEMET', 'WIKIDATA'].includes(kwSource)) {
+                        const cvLabel = extractKeywordLabelForComparison(keyword);
+                        
+                        for (let i = 0; i < combinedKeywords.length; i++) {
+                            const other = combinedKeywords[i];
+                            const otherSource = (other.source || '').toUpperCase();
+                            // Deselect keywords that are not from a CV source and have matching label
+                            const isNotCVSource = !['TERMDAT', 'GEMET', 'WIKIDATA'].includes(otherSource);
+                            if (isNotCVSource && extractKeywordLabelForComparison(other) === cvLabel && other.isSelected) {
+                                other.isSelected = false;
+                                const otherCard = document.getElementById(`keyword-${i}`);
+                                if (otherCard) {
+                                    otherCard.classList.remove('selected');
+                                }
+                            }
+                        }
+                    }
                 } else {
                     card.classList.remove('selected');
                 }
@@ -480,6 +501,13 @@
             
             updateKeywordCount();
             persistKeywords();
+        }
+        
+        function extractKeywordLabelForComparison(keyword) {
+            if (!keyword) return '';
+            const ml = keyword.multilingual_label || {};
+            const label = ml.de || ml.en || ml.fr || ml.it || keyword.label || '';
+            return (label || '').toString().trim().toLowerCase();
         }
         
         // Drag-and-drop has been removed; ordering is alphabetical.

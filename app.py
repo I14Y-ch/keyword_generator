@@ -1781,11 +1781,12 @@ JSON array:"""
                                 core_languages = {'de', 'fr', 'it', 'en'}
                                 available_core_langs = set(multilingual_terms.keys()) & core_languages
 
-                                # Exclude entries where any title has more than 4 words
+                                # Exclude entries where any title has more than 8 words
+                                # (Many legitimate multi-word organizational names exist)
                                 has_long_title = False
                                 for lang_code, title in multilingual_terms.items():
                                     word_count = len(title.split())
-                                    if word_count > 4:
+                                    if word_count > 8:
                                         logging.debug(f"Skipping TERMDAT entry {entry_id} - {lang_code} title has {word_count} words: '{title}'")
                                         has_long_title = True
                                         break
@@ -2424,24 +2425,23 @@ JSON array:"""
         results = []
         
         try:
-            # Search TERMDAT (no synonyms, exact match priority)
+            # Cascade: TERMDAT → GEMET → Wikidata; stop when first source yields results
             termdat_results = self.search_termdat(keyword, language, include_synonyms=False, max_results=5)
             for result in termdat_results:
                 result['search_keyword'] = keyword
-            results.extend(termdat_results)
-            
-            # Search GEMET
-            gemet_results = self.search_gemet(keyword)
-            for result in gemet_results:
-                result['search_keyword'] = keyword
-            results.extend(gemet_results)
-            
-            # Search Wikidata
-            wikidata_results = self.search_wikidata(keyword)
-            for result in wikidata_results:
-                result['search_keyword'] = keyword
-            results.extend(wikidata_results)
-            
+            if termdat_results:
+                results.extend(termdat_results)
+            else:
+                gemet_results = self.search_gemet(keyword)
+                for result in gemet_results:
+                    result['search_keyword'] = keyword
+                if gemet_results:
+                    results.extend(gemet_results)
+                else:
+                    wikidata_results = self.search_wikidata(keyword)
+                    for result in wikidata_results:
+                        result['search_keyword'] = keyword
+                    results.extend(wikidata_results)
         except Exception as e:
             logging.error(f"Error validating keyword '{keyword}': {e}")
         
@@ -2697,50 +2697,83 @@ JSON array:"""
         
         all_keywords = []
         seen_uris = set()
+        seen_labels = set()
         
+        def _label_identity(kw):
+            """Build a normalized label identity for deduplication when URI is missing."""
+            try:
+                ml = kw.get('multilingual_label') or {}
+                # prefer core languages order
+                label = (
+                    ml.get('de') or ml.get('fr') or ml.get('it') or ml.get('en') or ml.get('rm')
+                )
+                if not label:
+                    label = kw.get('label') or ''
+                    if isinstance(label, dict):
+                        label = label.get('de') or label.get('fr') or label.get('it') or label.get('en') or label.get('rm') or ''
+                    elif not isinstance(label, str):
+                        label = ''
+                norm = str(label).strip().lower()
+                return norm
+            except Exception:
+                return ''
+
         def add_unique(keywords_list):
-            """Helper to add unique keywords to all_keywords"""
+            """Helper to add unique keywords to all_keywords.
+            Ensures we only add the same keyword once by URI or label identity.
+            """
             unique = []
             for kw in keywords_list:
                 uri = kw.get('uri', '')
-                if uri and uri not in seen_uris:
+                if uri:
+                    if uri in seen_uris:
+                        continue
                     seen_uris.add(uri)
                     unique.append(kw)
                     all_keywords.append(kw)
-                elif not uri:
+                else:
+                    ident = _label_identity(kw)
+                    if ident and ident in seen_labels:
+                        continue
+                    if ident:
+                        seen_labels.add(ident)
                     unique.append(kw)
                     all_keywords.append(kw)
             return unique
         
-        # Phase 1: Search for exact matches WITHOUT synonyms
+        # Phase 1: Search for exact matches WITHOUT synonyms (cascade TERMDAT → GEMET → Wikidata)
         exact_matches = []
         for idx, keyword in enumerate(candidates):
             if yield_status:
                 yield {
                     'type': 'status',
                     'stage': 'exact',
-                    'message': f"[{idx + 1}/{len(candidates)}] Searching TERMDAT/GEMET/Wikidata for \"{keyword}\""
+                    'message': f"[{idx + 1}/{len(candidates)}] Searching TERMDAT→GEMET→Wikidata for \"{keyword}\""
                 }
 
             logging.info(f"Searching for exact matches: '{keyword}'")
             
-            # Search each source without synonyms
+            # Cascade search: TERMDAT first, then GEMET, then Wikidata (short-circuit on first hit)
+            batch_results = []
             termdat_results = self.search_termdat(keyword, query_lang, include_synonyms=False)
             for result in termdat_results:
                 result['extracted_from'] = query if len(query.split()) > 3 else None
                 result['search_keyword'] = keyword
-            
-            gemet_results = self.search_gemet(keyword)
-            for result in gemet_results:
-                result['extracted_from'] = query if len(query.split()) > 3 else None
-                result['search_keyword'] = keyword
-            
-            wikidata_results = self.search_wikidata(keyword)
-            for result in wikidata_results:
-                result['extracted_from'] = query if len(query.split()) > 3 else None
-                result['search_keyword'] = keyword
-            
-            batch_results = termdat_results + gemet_results + wikidata_results
+            if termdat_results:
+                batch_results = termdat_results
+            else:
+                gemet_results = self.search_gemet(keyword)
+                for result in gemet_results:
+                    result['extracted_from'] = query if len(query.split()) > 3 else None
+                    result['search_keyword'] = keyword
+                if gemet_results:
+                    batch_results = gemet_results
+                else:
+                    wikidata_results = self.search_wikidata(keyword)
+                    for result in wikidata_results:
+                        result['extracted_from'] = query if len(query.split()) > 3 else None
+                        result['search_keyword'] = keyword
+                    batch_results = wikidata_results
             unique_batch = add_unique(batch_results)
             exact_matches.extend(unique_batch)
 
@@ -2814,7 +2847,13 @@ JSON array:"""
             yield {'type': 'status', 'stage': 'complete', 'message': 'Keyword discovery finished'}
         
     def _apply_source_limits_and_sort(self, keywords, query):
-        """Apply source limits and sorting to a list of keywords."""
+        """Apply source limits and sorting to a list of keywords.
+        
+        Final deduplication ensures:
+        1. Same keyword appears only once across all sources
+        2. If a keyword exists in multiple sources, keep the highest-priority source
+           Priority: TERMDAT (0) > GEMET (1) > Wikidata (2)
+        """
         # Remove duplicates (same URI)
         seen_uris = set()
         unique_keywords = []
@@ -2825,6 +2864,47 @@ JSON array:"""
                 unique_keywords.append(kw)
             elif not uri:
                 unique_keywords.append(kw)
+        
+        # Final deduplication by label with source priority
+        def get_label_identity(kw):
+            """Get normalized label for deduplication across sources."""
+            ml = kw.get('multilingual_label') or {}
+            label = ml.get('de') or ml.get('fr') or ml.get('it') or ml.get('en') or ml.get('rm')
+            if not label:
+                label = kw.get('label', '')
+                if isinstance(label, dict):
+                    label = label.get('de') or label.get('fr') or label.get('it') or label.get('en') or label.get('rm') or ''
+            return str(label).strip().lower() if label else ''
+        
+        # Map each label to the best (highest-priority) source
+        source_priority = {'TERMDAT': 0, 'GEMET': 1, 'Wikidata': 2, 'LOCAL': 999}
+        keywords_by_label = {}
+        
+        for kw in unique_keywords:
+            ident = get_label_identity(kw)
+            if not ident:
+                # Keep keywords with no identifiable label (shouldn't happen but be safe)
+                if '' not in keywords_by_label:
+                    keywords_by_label[''] = kw
+                continue
+            
+            source = kw.get('source', 'Unknown')
+            source_rank = source_priority.get(source, 999)
+            
+            if ident not in keywords_by_label:
+                keywords_by_label[ident] = kw
+            else:
+                # If this source is higher priority than what we have, replace it
+                existing = keywords_by_label[ident]
+                existing_source = existing.get('source', 'Unknown')
+                existing_rank = source_priority.get(existing_source, 999)
+                
+                if source_rank < existing_rank:
+                    logging.debug(f"Final dedup: replacing {existing_source} with {source} for label '{ident}'")
+                    keywords_by_label[ident] = kw
+        
+        # Convert back to list, filtering out the empty key
+        unique_keywords = [kw for label, kw in keywords_by_label.items() if label]
         
         # Group keywords by source and limit per source
         source_limits = {
@@ -3466,12 +3546,22 @@ def search_keywords():
         # Generate keywords based on source filter
         if source_filter == 'all':
             if direct_search:
-                # Direct search mode: search each word individually
+                # Direct search mode: cascade TERMDAT → GEMET → Wikidata per word
                 keywords = []
-                for keyword in extracted_keywords:
-                    keywords.extend(keyword_generator.search_termdat(keyword, query_lang, include_synonyms))
-                    keywords.extend(keyword_generator.search_gemet(keyword))
-                    keywords.extend(keyword_generator.search_wikidata(keyword))
+                for word in extracted_keywords:
+                    # TERMDAT first
+                    t_results = keyword_generator.search_termdat(word, query_lang, include_synonyms)
+                    if t_results:
+                        keywords.extend(t_results)
+                        continue
+                    # GEMET if no TERMDAT
+                    g_results = keyword_generator.search_gemet(word)
+                    if g_results:
+                        keywords.extend(g_results)
+                        continue
+                    # Wikidata if neither TERMDAT nor GEMET
+                    w_results = keyword_generator.search_wikidata(word)
+                    keywords.extend(w_results)
             else:
                 # Normal mode: use the full generate_keywords workflow
                 keywords = keyword_generator.generate_keywords(query, query_lang, include_synonyms)

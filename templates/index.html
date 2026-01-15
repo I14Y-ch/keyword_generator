@@ -472,8 +472,41 @@
                 keywordData.cardId = cardId;
                 selectedKeywords.add(keywordData);
                 card.classList.add('selected');
+                
+                // DCAT-AP CH cascade rule: if this is a CV keyword (TERMDAT, GEMET, Wikidata),
+                // auto-deselect any existing I14Y keyword or manually added LOCAL keyword with the same label
+                const cvSource = (keywordData.source || '').toUpperCase();
+                if (['TERMDAT', 'GEMET', 'WIKIDATA'].includes(cvSource)) {
+                    const cvLabel = extractKeywordLabelForComparison(keywordData);
+                    
+                    const nonCVKeywordsToRemove = [];
+                    selectedKeywords.forEach(selected => {
+                        const selectedSource = (selected.source || '').toUpperCase();
+                        // Remove any non-CV keywords with matching label
+                        const isNotCVSource = !['TERMDAT', 'GEMET', 'WIKIDATA'].includes(selectedSource);
+                        if (isNotCVSource && extractKeywordLabelForComparison(selected) === cvLabel) {
+                            nonCVKeywordsToRemove.push(selected);
+                        }
+                    });
+                    
+                    nonCVKeywordsToRemove.forEach(kw => {
+                        selectedKeywords.delete(kw);
+                        const card = document.getElementById(kw.cardId);
+                        if (card) {
+                            card.classList.remove('selected');
+                        }
+                    });
+                }
             }
             updateButtonVisibility();
+        }
+
+        function extractKeywordLabelForComparison(keyword) {
+            if (!keyword) return '';
+            // Prefer multilingual_label, then fallback to label
+            const ml = keyword.multilingual_label || {};
+            const label = ml.de || ml.en || ml.fr || ml.it || keyword.label || '';
+            return (label || '').toString().trim().toLowerCase();
         }
 
         function updateButtonVisibility() {
