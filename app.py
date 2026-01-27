@@ -3975,7 +3975,9 @@ def upload_to_i14y():
     except requests.exceptions.ConnectionError:
         return jsonify({'error': 'Could not connect to I14Y API'}), 503
     except Exception as e:
-        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+        # Log full details on the server, but do not expose internal information to the client
+        logging.exception("Unexpected error in upload_to_i14y")
+        return jsonify({'error': 'An unexpected internal error occurred.'}), 500
 
 def _get_termdat_url(entry_id):
     """Get the TERMDAT URL, preferring register.ld.admin.ch but falling back to search URL.
