@@ -4378,8 +4378,34 @@ def update_i14y_keywords():
         
         update_data = current_object['data']
         
-        # Step 3: Update only the keywords field
-        update_data['keywords'] = formatted_keywords
+        # Step 3: Merge keywords intelligently
+        # Get current keywords from I14Y
+        current_keywords = update_data.get('keywords', [])
+        
+        # Build a set of URIs from the incoming keywords (selected by user)
+        selected_uris = {kw.get('uri', '').lower() for kw in keywords if kw.get('uri')}
+        
+        # Preserve existing I14Y keywords that are still selected (present in incoming keywords)
+        # This prevents overwriting keywords that were activated/marked
+        preserved_keywords = []
+        for current_kw in current_keywords:
+            current_uri = current_kw.get('uri', '').lower()
+            if current_uri and current_uri in selected_uris:
+                # Keep the existing keyword as-is (preserve I14Y version)
+                preserved_keywords.append(current_kw)
+        
+        # Build a set of preserved URIs to avoid duplicates
+        preserved_uris = {kw.get('uri', '').lower() for kw in preserved_keywords if kw.get('uri')}
+        
+        # Add new keywords (those not already in I14Y)
+        new_keywords = [kw for kw in formatted_keywords if kw.get('uri', '').lower() not in preserved_uris]
+        
+        # Combine preserved + new keywords
+        update_data['keywords'] = preserved_keywords + new_keywords
+        
+        logging.info(f"Keyword update: {len(current_keywords)} current, {len(preserved_keywords)} preserved, {len(new_keywords)} new, {len(update_data['keywords'])} total")
+        
+        logging.info(f"Keyword update: {len(current_keywords)} current, {len(preserved_keywords)} preserved, {len(new_keywords)} new, {len(update_data['keywords'])} total")
         
         # Step 4: Apply user-provided contact emails if any (from frontend validation)
         contact_email_updates = data.get('contactEmailUpdates')
