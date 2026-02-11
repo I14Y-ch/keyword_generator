@@ -3511,7 +3511,7 @@ def search_keywords_stream():
                 yield f"data: {json.dumps(payload)}\n\n"
         except Exception as e:
             logging.error(f"Streaming error: {e}", exc_info=True)
-            yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
+            yield f"data: {{\"error\": \"An error occurred while processing your request\"}}\n\n"
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
@@ -3621,11 +3621,11 @@ def search_keywords():
             return jsonify(result)
         except Exception as json_error:
             logging.error(f"JSON serialization error: {json_error}")
-            return jsonify({'error': 'Error creating JSON response', 'details': str(json_error)}), 500
+            return jsonify({'error': 'Unable to process search results'}), 500
             
     except Exception as e:
         logging.error(f"Search error: {e}", exc_info=True)
-        return jsonify({'error': f'Error during search: {str(e)}'}), 500
+        return jsonify({'error': 'An error occurred while searching'}), 500
 
 @app.route('/generate-progressive-keywords', methods=['POST'])
 def generate_progressive_keywords():
@@ -3703,7 +3703,7 @@ def generate_progressive_keywords():
         
     except Exception as e:
         logging.error(f"Workflow 1 keyword generation error: {e}", exc_info=True)
-        return jsonify({'error': f'Error generating keywords: {str(e)}'}), 500
+        return jsonify({'error': 'An error occurred while generating keywords'}), 500
 
 @app.route('/generate-progressive-keywords-stream', methods=['POST'])
 def generate_progressive_keywords_stream():
@@ -3764,7 +3764,7 @@ def generate_progressive_keywords_stream():
                 yield f"data: {json.dumps(payload)}\n\n"
         except Exception as e:
             logging.error(f"Streaming error (workflow1): {e}", exc_info=True)
-            yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
+            yield f"data: {{\"error\": \"An error occurred while processing your request\"}}\n\n"
 
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
@@ -3975,7 +3975,8 @@ def upload_to_i14y():
     except requests.exceptions.ConnectionError:
         return jsonify({'error': 'Could not connect to I14Y API'}), 503
     except Exception as e:
-        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+        logging.error(f"Unexpected error during I14Y update: {e}", exc_info=True)
+        return jsonify({'error': 'An unexpected error occurred'}), 500
 
 def _get_termdat_url(entry_id):
     """Get the TERMDAT URL, preferring register.ld.admin.ch but falling back to search URL.
@@ -4198,7 +4199,7 @@ def search_i14y_datasets():
         return jsonify({'error': 'Could not connect to I14Y API'}), 503
     except Exception as e:
         logging.error(f"I14Y search error: {e}", exc_info=True)
-        return jsonify({'error': f'Error searching I14Y: {str(e)}'}), 500
+        return jsonify({'error': 'An error occurred while searching I14Y'}), 500
 
 
 @app.route('/get-i14y-object', methods=['POST'])
@@ -4270,7 +4271,7 @@ def get_i14y_object():
 
     except Exception as e:
         logging.error(f"Error fetching I14Y object: {e}", exc_info=True)
-        return jsonify({'error': f'Error fetching I14Y object: {str(e)}'}), 500
+        return jsonify({'error': 'Unable to fetch I14Y object'}), 500
 
 @app.route('/update-i14y-keywords', methods=['POST'])
 def update_i14y_keywords():
@@ -4463,7 +4464,7 @@ def update_i14y_keywords():
         return jsonify({'error': 'Could not connect to I14Y API'}), 503
     except Exception as e:
         logging.error(f"Error updating keywords on I14Y: {e}", exc_info=True)
-        return jsonify({'error': f'Error updating keywords: {str(e)}'}), 500
+        return jsonify({'error': 'Unable to update keywords'}), 500
 
 @app.route('/get-i14y-organisations', methods=['POST'])
 def get_i14y_organisations():
@@ -4526,7 +4527,7 @@ def get_i14y_organisations():
         return jsonify({'error': 'Could not connect to I14Y API'}), 503
     except Exception as e:
         logging.error(f"Error fetching organisations: {e}", exc_info=True)
-        return jsonify({'error': f'Error fetching organisations: {str(e)}'}), 500
+        return jsonify({'error': 'Unable to fetch organisations'}), 500
 
 if __name__ == '__main__':
     # Development mode only - use gunicorn in production
