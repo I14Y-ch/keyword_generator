@@ -1,0 +1,143 @@
+name: Build & Push Docker Image to ACR
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - releases/*
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  packages: read
+
+env:
+  IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+  DOCKERFILE_PATH: ${{ vars.DOCKERFILE_PATH || 'Dockerfile.azure' }}
+  DOCKER_BUILD_CONTEXT: ${{ vars.DOCKER_BUILD_CONTEXT || '.' }}
+
+jobs:
+  image-build-and-push:
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_name: ${{ env.IMAGE_NAME }}
+      docker_version: ${{ steps.export-versions.outputs.docker_version }}
+      image_full: ${{ steps.export-versions.outputs.image_full }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Azure Login UAMI via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_ACR_UAMI_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_ACR_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        shell: bash
+        env:
+          AZURE_ACR: ${{ secrets.AZURE_ACR }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AZURE_ACR}" ]; then
+            echo "AZURE_ACR secret is required."
+            exit 1
+          fi
+
+          az acr login --name "${AZURE_ACR}"
+
+      - name: Compose & export versions
+        id: export-versions
+        shell: bash
+        env:
+          AZURE_ACR: ${{ secrets.AZURE_ACR }}
+        run: |
+          set -euo pipefail
+
+          AZURE_ACR_LOGIN_SERVER="$(az acr show \
+            -n "$AZURE_ACR" \
+            --query loginServer \
+            -o tsv)"
+
+          DOCKER_VERSION="$(date +"%Y%m%d%H%M%S")"
+          SHORT_SHA="${GITHUB_SHA::12}"
+          IMAGE_FULL="${AZURE_ACR_LOGIN_SERVER}/${IMAGE_NAME}:${DOCKER_VERSION}"
+
+          echo "AZURE_ACR_LOGIN_SERVER=${AZURE_ACR_LOGIN_SERVER}" >> "$GITHUB_ENV"
+          echo "DOCKER_VERSION=${DOCKER_VERSION}" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "IMAGE_FULL=${IMAGE_FULL}" >> "$GITHUB_ENV"
+
+          echo "docker_version=${DOCKER_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "image_full=${IMAGE_FULL}" >> "$GITHUB_OUTPUT"
+
+      - name: Show version
+        shell: bash
+        run: |
+          echo "DockerVersion=$DOCKER_VERSION"
+          echo "ShortSha=$SHORT_SHA"
+          echo "ImageName=$IMAGE_NAME"
+          echo "AcrLoginServer=$AZURE_ACR_LOGIN_SERVER"
+          echo "ImageFull=$IMAGE_FULL"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push image
+        shell: bash
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${IMAGE_NAME}" ]; then
+            echo "IMAGE_NAME variable is required."
+            exit 1
+          fi
+
+          if [ ! -f "${DOCKERFILE_PATH}" ]; then
+            echo "Dockerfile not found: ${DOCKERFILE_PATH}"
+            exit 1
+          fi
+
+          IMAGE="${AZURE_ACR_LOGIN_SERVER}/${IMAGE_NAME}"
+          echo "Building and pushing ${IMAGE}:$DOCKER_VERSION"
+
+          docker buildx build \
+            --file "${DOCKERFILE_PATH}" \
+            --push \
+            --label org.opencontainers.image.version="$DOCKER_VERSION" \
+            --label org.opencontainers.image.revision="$SHA" \
+            -t "$IMAGE:$DOCKER_VERSION" \
+            -t "$IMAGE:$SHORT_SHA" \
+            -t "$IMAGE:latest" \
+            "${DOCKER_BUILD_CONTEXT}"
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "## Docker image pushed"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Image name | \`${IMAGE_NAME}\` |"
+            echo "| Docker tag | \`${DOCKER_VERSION}\` |"
+            echo "| Short SHA tag | \`${SHORT_SHA}\` |"
+            echo "| Full image | \`${IMAGE_FULL}\` |"
+            echo ""
+            echo "Use this in Terraform:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "TF_VAR_image_name=${IMAGE_NAME}"
+            echo "TF_VAR_image_tag=${DOCKER_VERSION}"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
