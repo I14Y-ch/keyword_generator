@@ -103,6 +103,11 @@ app.config['CACHE_TYPE'] = 'SimpleCache'
 app.config['CACHE_DEFAULT_TIMEOUT'] = CACHE_TIMEOUT_SHORT
 cache = Cache(app)
 
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok'}), 200
+
 def create_http_session(contact_email=None, user_agent_suffix=""):
     """Create a configured HTTP session with retries and proper headers."""
     session = requests.Session()
