@@ -123,6 +123,27 @@ jobs:
             -t "$IMAGE:latest" \
             "${DOCKER_BUILD_CONTEXT}"
 
+      - name: Validate PRD Azure credentials
+        shell: bash
+        env:
+          AZURE_UAMI_CLIENT_ID_PRD: ${{ secrets.AZURE_UAMI_CLIENT_ID_PRD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID_PRD: ${{ secrets.AZURE_SUBSCRIPTION_ID_PRD }}
+        run: |
+          set -euo pipefail
+
+          missing=0
+          for name in AZURE_UAMI_CLIENT_ID_PRD AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID_PRD; do
+            if [ -z "${!name}" ]; then
+              echo "${name} secret is required for PRD deploy."
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Azure Login PRD UAMI via OIDC
         uses: azure/login@v2
         with:
