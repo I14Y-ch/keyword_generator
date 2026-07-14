@@ -19,7 +19,6 @@ env:
   DOCKER_BUILD_CONTEXT: ${{ vars.DOCKER_BUILD_CONTEXT || '.' }}
   AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
   AZURE_CONTAINER_APP_RESOURCE_GROUP: ${{ vars.AZURE_CONTAINER_APP_RESOURCE_GROUP }}
-  AZURE_CONTAINER_APP_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID_PRD }}
 
 jobs:
   image-build-and-push:
@@ -124,6 +123,13 @@ jobs:
             -t "$IMAGE:latest" \
             "${DOCKER_BUILD_CONTEXT}"
 
+      - name: Azure Login PRD UAMI via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_UAMI_CLIENT_ID_PRD }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_PRD }}
+
       - name: Update Azure Container App
         shell: bash
         run: |
@@ -138,13 +144,6 @@ jobs:
             echo "AZURE_CONTAINER_APP_RESOURCE_GROUP variable is required."
             exit 1
           fi
-
-          if [ -z "${AZURE_CONTAINER_APP_SUBSCRIPTION_ID}" ]; then
-            echo "AZURE_SUBSCRIPTION_ID_PRD secret is required."
-            exit 1
-          fi
-
-          az account set --subscription "${AZURE_CONTAINER_APP_SUBSCRIPTION_ID}"
 
           echo "Updating Azure Container App ${AZURE_CONTAINER_APP_NAME} with ${IMAGE_FULL}"
           az containerapp update \
