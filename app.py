@@ -84,13 +84,16 @@ GERMAN_COMPOUND_VOCAB = {
     'schiene', 'schienen', 'einzug', 'beamter', 'beamte', 'beamten'
 }
 
-# Network environment configuration
-NETWORK_ENV = "external"
-
 app = Flask(__name__)
 
-# Configure session and security
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+# Configure session and security (fail-closed: refuse to start with a weak or missing key)
+def _load_secret_key():
+    key = os.environ.get('SECRET_KEY', '')
+    if len(key) < 32:
+        raise RuntimeError('SECRET_KEY must be configured with at least 32 characters')
+    return key
+
+app.config['SECRET_KEY'] = _load_secret_key()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
@@ -135,8 +138,8 @@ class KeywordGenerator:
         self.termdat_base_url = "https://www.termdat.bk.admin.ch/search/entry/"
         self.gemet_base_url = "http://www.eionet.europa.eu/gemet/"
         self.wikidata_base_url = "https://www.wikidata.org/w/api.php"
-        # Set SSL verification based on network environment
-        self.verify_ssl = NETWORK_ENV != "internal"
+        # SSL verification is always enabled (removed NETWORK_ENV switch for security)
+        self.verify_ssl = True
 
         # Create a persistent session for external vocabulary API requests
         self.session = create_http_session(user_agent_suffix="")
@@ -1144,7 +1147,7 @@ JSON array:"""
                 'fields.comment': 'false'
             }
 
-            response = requests.get(url, params=params, timeout=10, verify=self.verify_ssl)
+            response = requests.get(url, params=params, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 if 'searchEntries' in data and isinstance(data['searchEntries'], list):
@@ -1215,7 +1218,7 @@ JSON array:"""
                 'fields.term': 'true',
                 'fields.definition': 'false'
             }
-            resp = requests.get(url, params=params, timeout=TIMEOUT_MEDIUM, verify=self.verify_ssl)
+            resp = requests.get(url, params=params, timeout=TIMEOUT_MEDIUM)
             if resp.status_code == 200:
                 data = resp.json()
                 if 'searchEntries' in data and isinstance(data['searchEntries'], list):
@@ -1732,7 +1735,7 @@ JSON array:"""
 
                 logging.debug(f"TERMDAT Search Request for '{search_query}': {full_url}")
 
-                response = requests.get(full_url, timeout=8, verify=self.verify_ssl)
+                response = requests.get(full_url, timeout=8)
 
                 if response.status_code == 200:
                     # Reset failure count on success
@@ -3795,8 +3798,8 @@ def upload_to_i14y():
     if not new_keywords:
         return jsonify({'error': 'Keywords are required'}), 400
     
-    # Set SSL verification based on network environment
-    verify_ssl = NETWORK_ENV != "internal"
+    # SSL verification is always enabled (removed NETWORK_ENV switch for security)
+    verify_ssl = True
     
     try:
         # Clean the token - remove "Bearer " prefix if it exists
@@ -4232,7 +4235,7 @@ def get_i14y_object():
 
         url = f"{public_base}{endpoint_map[object_type]}/{object_id}"
 
-        verify_ssl = NETWORK_ENV != "internal"
+        verify_ssl = True  # SSL verification is always enabled (removed NETWORK_ENV switch)
         response = http_session.get(url, timeout=10, verify=verify_ssl)
 
         if not response.ok:
@@ -4362,7 +4365,7 @@ def update_i14y_keywords():
             'Accept': 'application/json'
         }
         
-        verify_ssl = NETWORK_ENV != "internal"
+        verify_ssl = True  # SSL verification is always enabled (removed NETWORK_ENV switch)
         
         # Step 1: GET the current object from Partner API
         logging.info(f"Getting current {object_type} {object_id} from Partner API")
@@ -4536,4 +4539,5 @@ def get_i14y_organisations():
 
 if __name__ == '__main__':
     # Development mode only - use gunicorn in production
-    app.run(debug=False, host='0.0.0.0', port=8080)
+    # Bind all interfaces: required in containerized deployments where the platform's ingress reaches the app via the container network.
+    app.run(debug=False, host='0.0.0.0', port=8080)  # nosec B104  # nosemgrep: python.flask.security.audit.app-run-param-config.avoid_app_run_with_bad_host

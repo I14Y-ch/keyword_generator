@@ -10,14 +10,16 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 WORKDIR /app
 
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && addgroup --system app \
     && adduser --system --ingroup app --home /app --no-create-home app
 
 COPY requirements.txt .
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt
+RUN python -m pip install --upgrade pip "setuptools>=78.1.1,<81" \
+    && python -m pip install -r requirements.txt \
+    && python -m pip uninstall --yes pip
 
 COPY --chown=app:app . .
 
