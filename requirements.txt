@@ -8,5 +8,5 @@ python-dotenv==1.2.2
 openai==1.93.0
 httpx==0.28.1
 gunicorn==26.0.0
-nltk==3.10.0
+nltk==3.10.1
 urllib3==2.7.0
