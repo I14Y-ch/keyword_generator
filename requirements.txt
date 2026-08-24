@@ -4,7 +4,7 @@ Werkzeug==3.1.6
 requests==2.34.2
 Flask-Caching==2.3.0
 langdetect==1.0.9
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 openai==1.93.0
 httpx==0.28.1
 gunicorn==26.0.0
